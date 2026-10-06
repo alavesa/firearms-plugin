@@ -1,0 +1,125 @@
+# Guns. Every gun is ONE fixed fire mode: semi or auto.
+#  model          custom_model_data string = the .bbmodel file name in plugins/Firearms/models (without .bbmodel)
+#  weight         kg - walk-speed penalty while held (config weight.speed-per-kg)
+#  fire-mode      semi | auto
+#  fire-rate      rounds per second (auto: spray cadence; semi: the fastest you may click)
+#  damage         hearts*2 at full strength (within hitscan-range)
+#  magazine       rounds the gun holds
+#  mag            magazine type (mags.yml) - guns can share a type. "none" = loaded round by round (pump-action)
+#  ammo           round type (mags.yml ammo:) used when mag is none (pump/tube guns)
+#  pump-action    true = reload one round at a time; shooting interrupts the reload and keeps what was loaded
+#  reload-seconds magazine swap time (mag guns) / seconds PER ROUND (pump-action)
+#  hitscan-range  blocks the shot is instant (full damage). Past it the bullet becomes a slowing projectile.
+#  range          max distance the projectile can still travel/hit
+#  speed          projectile speed in blocks/tick right after the hitscan range (then drag + gravity apply)
+#  accuracy       hip-fire spread in degrees (0 = laser)
+#  aim-accuracy   spread while sneaking
+#  recoil         vertical camera kick per shot in degrees
+#  h-recoil       horizontal kick, random left/right up to this many degrees
+#  falloff-min    damage multiplier at max range (damage falls linearly from hitscan-range to range)
+#  pellets        rounds per trigger pull (shotgun spread)
+#  sound / pitch  shot sound
+guns:
+  pistol:
+    name: "&fPistol"
+    model: pistol
+    weight: 0.9
+    fire-mode: semi
+    fire-rate: 6
+    damage: 4.0
+    magazine: 15
+    mag: mag_9mm
+    reload-seconds: 1.4
+    hitscan-range: 12
+    range: 60
+    speed: 4.0
+    accuracy: 1.2
+    aim-accuracy: 0.4
+    recoil: 2.0
+    h-recoil: 0.8
+    falloff-min: 0.4
+    sound: "minecraft:block.anvil.land"
+    pitch: 1.8
+  smg:
+    name: "&fSMG"
+    model: smg
+    weight: 2.5
+    fire-mode: auto
+    fire-rate: 11
+    damage: 3.0
+    magazine: 30
+    mag: mag_9mm           # shares the pistol's magazine
+    reload-seconds: 1.8
+    hitscan-range: 10
+    range: 50
+    speed: 4.0
+    accuracy: 2.2
+    aim-accuracy: 0.9
+    recoil: 1.2
+    h-recoil: 1.0
+    falloff-min: 0.3
+    sound: "minecraft:block.bamboo.hit"
+    pitch: 1.9
+  rifle:
+    name: "&fRifle"
+    model: rifle
+    weight: 3.6
+    fire-mode: auto
+    fire-rate: 9
+    damage: 5.0
+    magazine: 30
+    mag: mag_556
+    reload-seconds: 2.2
+    hitscan-range: 20
+    range: 90
+    speed: 5.0
+    accuracy: 1.6
+    aim-accuracy: 0.5
+    recoil: 1.8
+    h-recoil: 0.9
+    falloff-min: 0.5
+    sound: "minecraft:entity.generic.explode"
+    pitch: 1.9
+  shotgun:
+    name: "&fPump Shotgun"
+    model: shotgun
+    weight: 3.4
+    fire-mode: semi
+    fire-rate: 1.3
+    damage: 2.2            # per pellet
+    pellets: 8
+    magazine: 6            # tube capacity
+    mag: none              # loaded round by round
+    ammo: shell_12ga
+    pump-action: true
+    reload-seconds: 0.55   # per shell
+    hitscan-range: 8
+    range: 25
+    speed: 3.0
+    accuracy: 5.0
+    aim-accuracy: 3.5
+    recoil: 5.0
+    h-recoil: 1.5
+    falloff-min: 0.15
+    sound: "minecraft:entity.generic.explode"
+    pitch: 1.3
+  sniper:
+    name: "&fSniper Rifle"
+    model: sniper
+    weight: 5.5
+    fire-mode: semi
+    fire-rate: 0.9
+    damage: 14.0
+    magazine: 5
+    mag: mag_762
+    reload-seconds: 2.8
+    hitscan-range: 40
+    range: 160
+    speed: 7.0
+    accuracy: 3.0
+    aim-accuracy: 0.05
+    recoil: 6.0
+    h-recoil: 0.5
+    falloff-min: 0.7
+    sound: "minecraft:entity.lightning_bolt.thunder"
+    pitch: 1.6

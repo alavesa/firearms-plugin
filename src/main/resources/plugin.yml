@@ -1,0 +1,21 @@
+name: Firearms
+version: '${project.version}'
+main: fi.alavesa.firearms.FirearmsPlugin
+api-version: '1.21'
+description: Ray-based guns - hold-to-spray, F reload, pump-action, magazines, hitscan + projectile, pass-through blocks, packet recoil, craters, .bbmodel pack generator.
+commands:
+  firearms:
+    description: Firearms commands
+    aliases: [fa]
+    usage: |
+      /firearms list
+      /firearms give <gun|mag|ammo id> [amount] [player]
+      /firearms pack
+      /firearms reload
+permissions:
+  firearms.use:
+    default: true
+  firearms.give:
+    default: op
+  firearms.admin:
+    default: op

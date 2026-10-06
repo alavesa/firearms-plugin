@@ -1,0 +1,14 @@
+# Round (ammo) types and magazine types.
+#  ammo:  loose rounds - items that FILL magazines (right-click a magazine to fill it from your inventory)
+#         and that pump-action guns load directly.
+#  mags:  magazine items. A magazine holds rounds of ONE ammo type; any gun with mag: <id> accepts it.
+#         Reloading swaps the whole magazine: the one in the gun comes back to you with whatever was left.
+ammo:
+  round_9mm:   { name: "&79mm Round",     model: round_9mm,   stack: 64 }
+  round_556:   { name: "&75.56 Round",    model: round_556,   stack: 64 }
+  round_762:   { name: "&77.62 Round",    model: round_762,   stack: 64 }
+  shell_12ga:  { name: "&712ga Shell",    model: shell_12ga,  stack: 32 }
+mags:
+  mag_9mm:  { name: "&f9mm Magazine",   ammo: round_9mm, capacity: 30, model: mag_9mm }
+  mag_556:  { name: "&f5.56 Magazine",  ammo: round_556, capacity: 30, model: mag_556 }
+  mag_762:  { name: "&f7.62 Magazine",  ammo: round_762, capacity: 5,  model: mag_762 }

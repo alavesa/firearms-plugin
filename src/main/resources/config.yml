@@ -1,0 +1,84 @@
+# ================================ FIREARMS ================================
+# CONTROLS:  LEFT-click = fire (SEMI: one shot per click; AUTO: hold to spray, release to stop)
+#            F          = reload (magazine swap, or one round at a time for pump-action guns)
+#            RIGHT-click with a MAGAZINE in hand = fill it from loose rounds in your inventory
+#            Sneak      = aim (tighter accuracy, half recoil)
+
+# The vanilla item every gun / magazine / round / crater is built on. The resource pack re-skins it
+# by custom_model_data (see /firearms pack). Pick something with no right-click behaviour of its own.
+item-base: BRICK
+
+# ---- Hold-to-fire detection (AUTO guns) ----
+# Minecraft's client only repeats the arm swing while it is MINING a block under the crosshair, so while an
+# AUTO gun is held an invisible, unbreakable BARRIER is shown to you only, this many blocks out on your
+# crosshair (you see its thin wireframe outline; the server never has it, bullets pass, nobody else sees it).
+# Holding LEFT "mines" it = continuous fire; release = stop. A nearer real block is mined instead (hidden
+# Mining Fatigue keeps it from cracking); an enemy under the crosshair gets the box just in front of them.
+hold:
+  distance: 7.0          # 0 = off (tap-fire only)
+  reach-bonus: 6.0       # extra block reach while an AUTO gun is held so the barrier is reachable
+  lead: 3.0              # fast camera turns: also show the cluster where the crosshair is heading
+  linger-ticks: 3        # keep cells this long after the crosshair leaves them
+  mining-fatigue: true   # hidden Mining Fatigue III while any gun is held (no cracks, no breaking)
+
+# ---- Ballistics ----
+ballistics:
+  tracer: true           # dust tracer along each shot
+  tracer-step: 1.5       # blocks between tracer particles
+  projectile-drag: 0.06  # per-tick speed loss after the hitscan range (projectile phase)
+  projectile-gravity: 0.03  # per-tick downward velocity gain after the hitscan range
+  # Blocks a bullet flies THROUGH if there is only ONE layer of them (a second layer in a row stops it).
+  # "#name" = a vanilla block tag, otherwise a block id.
+  pass-through:
+    - "#logs"
+    - "#planks"
+    - "#wooden_slabs"
+    - "#wooden_stairs"
+    - "#wooden_doors"
+    - "#wooden_trapdoors"
+    - "#wooden_fences"
+    - "#wool"
+    - "#wool_carpets"
+    - IRON_BARS
+    - WATER
+    - LAVA
+    - POWDER_SNOW
+    - BARRIER
+  # Bullets always pass these, any thickness (never count as a layer).
+  ignore:
+    - BARRIER
+    - LIGHT
+    - STRUCTURE_VOID
+
+# ---- Craters (bullet holes) ----
+craters:
+  enabled: true
+  seconds: 90            # how long a crater stays
+  max-per-world: 400     # oldest are removed first
+  model: crater          # custom_model_data string of the crater item model (you texture it)
+  size: 0.35             # display scale
+
+# ---- Weight ----
+weight:
+  speed-per-kg: 0.012    # walk-speed penalty per kg while the gun is held (3 kg = -3.6 %)
+
+# ---- Recoil ----
+recoil:
+  ticks: 3               # the kick is spread over this many ticks (packet-driven, no teleports)
+  aim-multiplier: 0.5    # recoil while sneaking
+
+# ---- Accuracy ----
+accuracy:
+  moving-penalty: 1.0    # extra spread (degrees) while walking
+  sprint-penalty: 2.5    # extra spread while sprinting
+  air-penalty: 2.0       # extra spread while off the ground
+
+# ---- First-person animations (frames generated from .bbmodel animations by /firearms pack) ----
+anim:
+  frame-ticks: 1
+
+# ---- Resource pack generator ----
+pack:
+  # pack.mcmeta formats written for the generated pack (26.x needs min/max; older servers use pack_format)
+  min-format: 82
+  max-format: 999
