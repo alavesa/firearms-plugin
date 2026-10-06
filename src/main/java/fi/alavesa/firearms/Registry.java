@@ -268,15 +268,15 @@ public final class Registry {
      *  ADVENTURE player's client is allowed to "mine" the hold-detect barrier (nothing can actually break). */
     ItemStack components(ItemStack item) {
         String swing = "={type:\"whack\",duration:2147483647}";
-        ItemStack sw = component(item, "minecraft:swing_animation" + swing);
-        if (sw == null) sw = component(item, "minecraft:attack_animation" + swing);
+        ItemStack sw = component(item, "minecraft:swing_animation" + swing, true);     // 26.2 name (quiet if missing)
+        if (sw == null) sw = component(item, "minecraft:attack_animation" + swing, false); // 26.3+ name
         if (sw != null) { item = sw; swingOk = true; }
-        ItemStack cb = component(item, "minecraft:can_break=[{}]");
-        if (cb == null) cb = component(item, "minecraft:can_break={predicates:[{}]}");
+        ItemStack cb = component(item, "minecraft:can_break=[{}]", true);
+        if (cb == null) cb = component(item, "minecraft:can_break={predicates:[{}]}", false);
         if (cb != null) {
             item = cb;
             canBreakOk = true;
-            ItemStack td = component(item, "minecraft:tooltip_display={hidden_components:[\"minecraft:can_break\"]}");
+            ItemStack td = component(item, "minecraft:tooltip_display={hidden_components:[\"minecraft:can_break\"]}", false);
             if (td != null) item = td;
         }
         return item;
@@ -284,11 +284,11 @@ public final class Registry {
 
     /** Apply one item component through the vanilla item-string parser; null if this server rejects it.
      *  NOTE: Paper prepends the item id itself - pass ONLY the "[component]" part. */
-    private static ItemStack component(ItemStack item, String component) {
+    private static ItemStack component(ItemStack item, String component, boolean quiet) {
         try {
             return Bukkit.getUnsafe().modifyItemStack(item, "[" + component + "]");
         } catch (Throwable t) {
-            if (componentWarned.add(component))
+            if (!quiet && componentWarned.add(component))
                 Bukkit.getLogger().warning("[Firearms] component rejected by this server: " + component);
             return null;
         }

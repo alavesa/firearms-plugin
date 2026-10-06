@@ -79,6 +79,6 @@ anim:
 
 # ---- Resource pack generator ----
 pack:
-  # pack.mcmeta formats written for the generated pack (26.x needs min/max; older servers use pack_format)
-  min-format: 82
+  # pack.mcmeta: a wide min/max range so every 1.21.4+ / 26.x client accepts the pack without a warning
+  min-format: 46
   max-format: 999

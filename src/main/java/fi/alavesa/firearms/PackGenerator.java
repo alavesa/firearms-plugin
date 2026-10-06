@@ -96,7 +96,7 @@ public final class PackGenerator {
         JsonObject pack = new JsonObject();
         JsonObject p = new JsonObject();
         p.addProperty("description", "Firearms (generated)");
-        int min = plugin.getConfig().getInt("pack.min-format", 64), max = plugin.getConfig().getInt("pack.max-format", 999);
+        int min = plugin.getConfig().getInt("pack.min-format", 46), max = plugin.getConfig().getInt("pack.max-format", 999);
         p.addProperty("pack_format", min);
         p.addProperty("min_format", min);
         p.addProperty("max_format", max);
