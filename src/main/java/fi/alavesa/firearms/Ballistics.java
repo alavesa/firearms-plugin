@@ -15,6 +15,7 @@ import org.bukkit.entity.Entity;
 import org.bukkit.entity.ItemDisplay;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
 import org.bukkit.util.RayTraceResult;
 import org.bukkit.util.Transformation;
 import org.bukkit.util.Vector;
@@ -56,7 +57,7 @@ public final class Ballistics {
 
     /** Result of a trace: whichever came first. */
     private static final class Hit {
-        LivingEntity entity; Block block; BlockFace face; Location point; double dist;
+        LivingEntity entity; Block block; BlockFace face; Location point; double dist; int penetrations;
     }
 
     public Ballistics(FirearmsPlugin plugin, Registry registry) {
@@ -131,8 +132,12 @@ public final class Ballistics {
     private void resolve(Hit hit, Player shooter, GunType gun, double distance, double dmgMult) {
         if (hit.entity != null) {
             double f = falloff(gun, distance);
-            double amount = gun.damage() * dmgMult * f;
+            // Shot through a penetrable wall: less damage per layer passed (ballistics.penetration-damage).
+            double pen = Math.pow(Math.max(0, Math.min(1, plugin.getConfig().getDouble("ballistics.penetration-damage", 0.9))), hit.penetrations);
+            double amount = gun.damage() * dmgMult * f * pen;
             if (amount <= 0) return;
+            amount = vestAbsorb(hit.entity, amount);
+            if (amount <= 0.001) return;
             hit.entity.setNoDamageTicks(0);          // fast fire must register every round
             hit.entity.damage(amount, shooter);
             if (shooter != null && shooter.isOnline())
@@ -143,6 +148,26 @@ public final class Ballistics {
             w.playSound(hit.point, "minecraft:block.stone.hit", 0.5f, 1.2f);
             crater(hit.block, hit.point, hit.face);
         }
+    }
+
+    /** A worn vest soaks its share of the bullet into its durability; the rest reaches the wearer. */
+    private double vestAbsorb(LivingEntity target, double amount) {
+        var eq = target.getEquipment();
+        if (eq == null) return amount;
+        ItemStack chest = eq.getChestplate();
+        ArmorType vest = registry.vestOf(chest);
+        if (vest == null) return amount;
+        double soak = amount * vest.absorb();
+        boolean broke = registry.damageVest(chest, soak);
+        if (broke) {
+            eq.setChestplate(null);
+            target.getWorld().playSound(target.getLocation(), "minecraft:entity.item.break", 1f, 0.8f);
+            if (target instanceof Player p) p.sendActionBar(net.kyori.adventure.text.Component.text("Your vest is destroyed!", net.kyori.adventure.text.format.NamedTextColor.RED));
+        } else {
+            eq.setChestplate(chest);
+            target.getWorld().playSound(target.getLocation(), "minecraft:item.armor.equip_chain", 0.7f, 0.6f);
+        }
+        return amount - soak;
     }
 
     /** 1.0 inside the hitscan range, then linear down to falloff-min at the max range. */
@@ -161,6 +186,7 @@ public final class Ballistics {
         Location cur = from.clone();
         double left = maxDist;
         double used = 0;
+        int penetrations = 0;
         for (int hop = 0; hop < 8 && left > 0.01; hop++) {
             RayTraceResult ent = w.rayTraceEntities(cur, dir, left, 0.25, e -> target(e, shooter));
             RayTraceResult blk = w.rayTraceBlocks(cur, dir, left, FluidCollisionMode.ALWAYS, true);
@@ -172,6 +198,7 @@ public final class Ballistics {
                 h.entity = (LivingEntity) ent.getHitEntity();
                 h.point = ent.getHitPosition().toLocation(w);
                 h.dist = used + ed;
+                h.penetrations = penetrations;
                 return h;
             }
             Block b = blk.getHitBlock();
@@ -197,6 +224,7 @@ public final class Ballistics {
                 h.dist = used + bd;
                 return h;
             }
+            if (!ignore.contains(type)) penetrations++;    // a real wall layer passed (barriers etc. don't count)
             double d = exit.distance(cur);
             used += d; left -= d; cur = exit;
         }

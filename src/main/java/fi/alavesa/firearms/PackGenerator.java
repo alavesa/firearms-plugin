@@ -54,6 +54,16 @@ public final class PackGenerator {
     private final Map<String, String> cmdToModel = new LinkedHashMap<>();  // custom_model_data -> model path
     private final Map<String, Map<String, int[]>> animIndex = new LinkedHashMap<>();
     private int frames = 0, placeholders = 0, models = 0;
+    private final Map<String, String> vestCmdToModel = new LinkedHashMap<>();   // vests live on the armour item
+    private final List<String> report = new ArrayList<>();
+
+    /** A resource-location-safe path for a model name. Minecraft rejects the WHOLE items file if any case
+     *  points at a path with an upper-case letter, a space or other illegal character - every model then
+     *  turns purple/black. The custom_model_data STRING may stay as written; only the path is sanitised. */
+    static String path(String name) {
+        String p = name.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_./-]", "_");
+        return p.isEmpty() ? "model" : p;
+    }
 
     public PackGenerator(FirearmsPlugin plugin, Registry registry) {
         this.plugin = plugin;
@@ -69,29 +79,15 @@ public final class PackGenerator {
         for (AmmoType a : registry.ammos()) model(dir, a.model(), "ammo", done);
         model(dir, plugin.getConfig().getString("craters.model", "crater"), "crater", done);
 
-        // items/<base>.json: pick the model by custom_model_data string.
-        String base = registry.base().getKey().getKey();
-        JsonArray cases = new JsonArray();
-        for (var e : cmdToModel.entrySet()) {
-            JsonObject c = new JsonObject();
-            c.addProperty("when", e.getKey());
-            JsonObject m = new JsonObject();
-            m.addProperty("type", "minecraft:model");
-            m.addProperty("model", NS + ":item/" + e.getValue());
-            c.add("model", m);
-            cases.add(c);
-        }
-        JsonObject select = new JsonObject();
-        select.addProperty("type", "minecraft:select");
-        select.addProperty("property", "minecraft:custom_model_data");
-        select.add("cases", cases);
-        JsonObject fallback = new JsonObject();
-        fallback.addProperty("type", "minecraft:model");
-        fallback.addProperty("model", "minecraft:item/" + base);
-        select.add("fallback", fallback);
-        JsonObject root = new JsonObject();
-        root.add("model", select);
-        put("assets/minecraft/items/" + base + ".json", GSON.toJson(root));
+        for (ArmorType v : registry.vests()) vest(dir, v, done);
+
+        // items/<base>.json (guns, mags, ammo, crater) and items/<armour>.json (vests): model by custom_model_data string.
+        itemsFile(registry.base().getKey().getKey(), cmdToModel);
+        itemsFile(registry.vestBase().getKey().getKey(), vestCmdToModel);
+        report.add(0, "Firearms pack report - " + new java.util.Date());
+        report.add(1, "custom_model_data string  ->  model path");
+        put("pack-report.txt", String.join("\n", report));
+        try { Files.writeString(new File(plugin.getDataFolder(), "pack-report.txt").toPath(), String.join("\n", report)); } catch (IOException ignored) { }
 
         JsonObject pack = new JsonObject();
         JsonObject p = new JsonObject();
@@ -124,6 +120,77 @@ public final class PackGenerator {
 
     private void put(String path, String text) { files.put(path, text.getBytes(StandardCharsets.UTF_8)); }
 
+    private void itemsFile(String base, Map<String, String> map) {
+        JsonArray cases = new JsonArray();
+        Set<String> seen = new LinkedHashSet<>();
+        for (var e : map.entrySet()) {
+            if (!seen.add(e.getKey())) continue;                  // duplicate "when" would be rejected by the client
+            JsonObject c = new JsonObject();
+            c.addProperty("when", e.getKey());
+            JsonObject m = new JsonObject();
+            m.addProperty("type", "minecraft:model");
+            m.addProperty("model", NS + ":item/" + e.getValue());
+            c.add("model", m);
+            cases.add(c);
+            report.add(base + ": \"" + e.getKey() + "\" -> " + NS + ":item/" + e.getValue());
+        }
+        JsonObject select = new JsonObject();
+        select.addProperty("type", "minecraft:select");
+        select.addProperty("property", "minecraft:custom_model_data");
+        select.add("cases", cases);
+        JsonObject fallback = new JsonObject();
+        fallback.addProperty("type", "minecraft:model");
+        fallback.addProperty("model", "minecraft:item/" + base);
+        select.add("fallback", fallback);
+        JsonObject root = new JsonObject();
+        root.add("model", select);
+        put("assets/minecraft/items/" + base + ".json", GSON.toJson(root));
+    }
+
+    /** Vest item icon: its .bbmodel if present, else a generated flat icon (worn look = the dyed chestplate). */
+    private void vest(File dir, ArmorType v, Set<String> done) throws IOException {
+        String name = v.model();
+        if (!done.add(name)) return;
+        File bb = new File(dir, name + ".bbmodel");
+        if (bb.exists()) {
+            try {
+                Map<String, String> saved = new LinkedHashMap<>(cmdToModel);
+                convert(bb, name);
+                for (var e : cmdToModel.entrySet()) if (!saved.containsKey(e.getKey())) vestCmdToModel.put(e.getKey(), e.getValue());
+                cmdToModel.clear(); cmdToModel.putAll(saved);
+                models++;
+                return;
+            } catch (Exception ex) {
+                warnings.add(name + ".bbmodel could not be converted (" + ex.getMessage() + ") - placeholder used");
+            }
+        }
+        String p = path(name);
+        File custom = new File(dir, name + ".png");
+        files.put("assets/" + NS + "/textures/item/" + p + ".png", custom.exists() ? Files.readAllBytes(custom.toPath()) : vestPng(v.color()));
+        JsonObject model = new JsonObject();
+        model.addProperty("parent", "minecraft:item/generated");
+        JsonObject tex = new JsonObject();
+        tex.addProperty("layer0", NS + ":item/" + p);
+        model.add("textures", tex);
+        put("assets/" + NS + "/models/item/" + p + ".json", GSON.toJson(model));
+        vestCmdToModel.put(name, p);
+        placeholders++;
+    }
+
+    private static byte[] vestPng(int rgb) throws IOException {
+        BufferedImage img = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+        int r = (rgb >> 16) & 255, g = (rgb >> 8) & 255, b = rgb & 255;
+        for (int y = 2; y < 15; y++) for (int x = 2; x < 14; x++) {
+            boolean neck = y < 5 && x > 5 && x < 10, arm = y < 6 && (x < 4 || x > 11);
+            if (neck || arm) continue;
+            int shade = (x == 2 || x == 13 || y == 14 || (y == 6 && (x < 4 || x > 11))) ? 60 : 100;
+            img.setRGB(x, y, (255 << 24) | (r * shade / 100 << 16) | (g * shade / 100 << 8) | (b * shade / 100));
+        }
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ImageIO.write(img, "png", out);
+        return out.toByteArray();
+    }
+
     private void model(File dir, String name, String kind, Set<String> done) throws IOException {
         if (name == null || name.isEmpty() || !done.add(name)) return;
         File bb = new File(dir, name + ".bbmodel");
@@ -150,9 +217,9 @@ public final class PackGenerator {
             case "crater" -> {
                 File custom = new File(dir, name + ".png");
                 byte[] png = custom.exists() ? Files.readAllBytes(custom.toPath()) : craterPng();
-                files.put("assets/" + NS + "/textures/item/" + name + ".png", png);
-                tex.addProperty("0", NS + ":item/" + name);
-                tex.addProperty("particle", NS + ":item/" + name);
+                files.put("assets/" + NS + "/textures/item/" + path(name) + ".png", png);
+                tex.addProperty("0", NS + ":item/" + path(name));
+                tex.addProperty("particle", NS + ":item/" + path(name));
                 elements.add(cube(new double[]{0, 0, 7.9}, new double[]{16, 16, 8.1}, "#0", new double[]{0, 0, 16, 16}, null));
             }
             case "mag" -> {
@@ -177,8 +244,8 @@ public final class PackGenerator {
         model.add("textures", tex);
         model.add("elements", elements);
         model.add("display", defaultDisplay(1.0));
-        put("assets/" + NS + "/models/item/" + name + ".json", GSON.toJson(model));
-        cmdToModel.put(name, name);
+        put("assets/" + NS + "/models/item/" + path(name) + ".json", GSON.toJson(model));
+        cmdToModel.put(name, path(name));
     }
 
     private static JsonObject cube(double[] from, double[] to, String texture, double[] uv, JsonObject rotation) {
@@ -253,6 +320,8 @@ public final class PackGenerator {
 
     private void convert(File bb, String name) throws IOException {
         JsonObject root = JsonParser.parseString(Files.readString(bb.toPath())).getAsJsonObject();
+        final String mpath = path(name);
+        if (!mpath.equals(name)) warnings.add("'" + name + "' is not a valid model path - files written as '" + mpath + "' (the custom_model_data string stays '" + name + "')");
         double resW = 16, resH = 16;
         if (root.has("resolution")) {
             JsonObject r = root.getAsJsonObject("resolution");
@@ -268,12 +337,12 @@ public final class PackGenerator {
             String tname = str(t.get("name"), "tex" + ti).replaceAll("\\.png$", "").replaceAll("[^a-z0-9_]", "_").toLowerCase(Locale.ROOT);
             String src = str(t.get("source"), "");
             if (src.contains("base64,")) {
-                files.put("assets/" + NS + "/textures/item/" + name + "/" + tname + ".png", Base64.getDecoder().decode(src.substring(src.indexOf("base64,") + 7)));
+                files.put("assets/" + NS + "/textures/item/" + mpath + "/" + tname + ".png", Base64.getDecoder().decode(src.substring(src.indexOf("base64,") + 7)));
             } else {
                 warnings.add(name + ": texture " + tname + " has no embedded image");
             }
-            textures.addProperty(String.valueOf(ti), NS + ":item/" + name + "/" + tname);
-            if (ti == 0) textures.addProperty("particle", NS + ":item/" + name + "/" + tname);
+            textures.addProperty(String.valueOf(ti), NS + ":item/" + mpath + "/" + tname);
+            if (ti == 0) textures.addProperty("particle", NS + ":item/" + mpath + "/" + tname);
             texIndex.put(str(t.get("uuid"), "u" + ti), ti);
             texIndex.put(str(t.get("id"), String.valueOf(ti)), ti);
             texRes.add(new double[]{ num(t.get("uv_width"), resW), num(t.get("uv_height"), resH) });
@@ -323,8 +392,8 @@ public final class PackGenerator {
 
         // --- rest model
         JsonObject rest = bake(name, cubes, bones, rootBone, textures, texIndex, texRes, display, null, 0, S);
-        put("assets/" + NS + "/models/item/" + name + ".json", GSON.toJson(rest));
-        cmdToModel.put(name, name);
+        put("assets/" + NS + "/models/item/" + mpath + ".json", GSON.toJson(rest));
+        cmdToModel.put(name, mpath);
 
         // --- animations -> frames
         int frameTicks = Math.max(1, plugin.getConfig().getInt("anim.frame-ticks", 1));
@@ -351,8 +420,8 @@ public final class PackGenerator {
                 double t = n == 1 ? clip.length : (i - 1) * (clip.length / (n - 1));
                 JsonObject frame = bake(name, cubes, bones, rootBone, textures, texIndex, texRes, display, clip, t, S);
                 String fname = name + "_" + key + "_" + i;
-                put("assets/" + NS + "/models/item/" + fname + ".json", GSON.toJson(frame));
-                cmdToModel.put(fname, fname);
+                put("assets/" + NS + "/models/item/" + mpath + "_" + key + "_" + i + ".json", GSON.toJson(frame));
+                cmdToModel.put(fname, mpath + "_" + key + "_" + i);
                 frames++;
             }
             clips.put(key, new int[]{n, frameTicks});
@@ -429,6 +498,12 @@ public final class PackGenerator {
                 rotation.addProperty("axis", axis == 0 ? "x" : axis == 1 ? "y" : "z");
                 rotation.addProperty("angle", snapped);
             }
+            boolean inRange = true;
+            for (int i = 0; i < 3; i++) if (from[i] < -16 || from[i] > 32 || to[i] < -16 || to[i] > 32) inRange = false;
+            if (!inRange) {   // one bad cube would make the client reject the whole model: clamp it instead
+                for (int i = 0; i < 3; i++) { from[i] = Math.max(-16, Math.min(32, from[i])); to[i] = Math.max(-16, Math.min(32, to[i])); }
+                if (clip == null) warnings.add(name + ": a cube moved outside the Java model range and was clamped");
+            }
             JsonObject e = new JsonObject();
             e.add("from", arr(from));
             e.add("to", arr(to));
@@ -461,13 +536,15 @@ public final class PackGenerator {
                 JsonObject h = disp.has(hand) ? disp.getAsJsonObject(hand) : transform(new double[]{0, 0, 0}, new double[]{0, 0, 0}, new double[]{1, 1, 1});
                 double[] r = vec(h.get("rotation")), tr = vec(h.get("translation")), sc = vec(h.get("scale"));
                 h.add("rotation", arr(r[0] + rootRot[0], r[1] + rootRot[1], r[2] + rootRot[2]));
-                h.add("translation", arr(tr[0] + rootPos[0] * sc[0], tr[1] + rootPos[1] * sc[1], tr[2] + rootPos[2] * sc[2]));
+                h.add("translation", arr(clamp80(tr[0] + rootPos[0] * sc[0]), clamp80(tr[1] + rootPos[1] * sc[1]), clamp80(tr[2] + rootPos[2] * sc[2])));
                 disp.add(hand, h);
             }
         }
         model.add("display", disp);
         return model;
     }
+
+    private static double clamp80(double v) { return Math.max(-80, Math.min(80, v)); }
 
     private static JsonObject displayFrom(JsonObject bbDisplay, double comp) {
         JsonObject d = defaultDisplay(comp);
@@ -477,7 +554,7 @@ public final class PackGenerator {
             double[] r = o.has("rotation") ? vec(o.get("rotation")) : new double[]{0, 0, 0};
             double[] tr = o.has("translation") ? vec(o.get("translation")) : new double[]{0, 0, 0};
             double[] sc = o.has("scale") ? vec(o.get("scale")) : new double[]{1, 1, 1};
-            for (int i = 0; i < 3; i++) sc[i] = Math.min(4, sc[i] * comp);
+            for (int i = 0; i < 3; i++) { sc[i] = Math.min(4, sc[i] * comp); tr[i] = clamp80(tr[i]); }
             d.add(en.getKey(), transform(r, tr, sc));
         }
         return d;

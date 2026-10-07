@@ -43,7 +43,7 @@ public final class HoldDetector {
     private final Registry registry;
     private final Map<UUID, Map<Location, Integer>> cells = new ConcurrentHashMap<>();
     private final Map<UUID, Vector> lastDir = new ConcurrentHashMap<>();
-    private final NamespacedKey reachKey, weightKey;
+    private final NamespacedKey reachKey, weightKey, atkKey;
     private int tick = 0;
 
     public HoldDetector(FirearmsPlugin plugin, Registry registry) {
@@ -51,6 +51,7 @@ public final class HoldDetector {
         this.registry = registry;
         this.reachKey = new NamespacedKey(plugin, "block_reach");
         this.weightKey = new NamespacedKey(plugin, "weight");
+        this.atkKey = new NamespacedKey(plugin, "attack_speed");
     }
 
     /** Every tick: maintain each auto-gun holder's client-side barrier cluster. */
@@ -153,6 +154,7 @@ public final class HoldDetector {
         double reachBonus = plugin.getConfig().getDouble("hold.reach-bonus", 6.0);
         boolean fatigue = plugin.getConfig().getBoolean("hold.mining-fatigue", true);
         double perKg = plugin.getConfig().getDouble("weight.speed-per-kg", 0.012);
+        boolean noDip = plugin.getConfig().getBoolean("hold.no-dip", true);
         for (Player p : plugin.getServer().getOnlinePlayers()) {
             ItemStack held = p.getInventory().getItemInMainHand();
             GunType gun = registry.gunOf(held);
@@ -162,6 +164,9 @@ public final class HoldDetector {
                 AttributeModifier.Operation.ADD_NUMBER);
             double weight = holding ? -Math.min(0.9, gun.weight() * perKg) : 0;
             modifier(p.getAttribute(Attribute.MOVEMENT_SPEED), weightKey, weight, AttributeModifier.Operation.ADD_SCALAR);
+            // No "dip": after a click the client lowers the held item while the melee attack cooldown recovers.
+            // A huge attack_speed makes that cooldown instant, so the gun stays up and the fire clip is visible.
+            modifier(p.getAttribute(Attribute.ATTACK_SPEED), atkKey, holding && noDip ? 1000.0 : 0, AttributeModifier.Operation.ADD_NUMBER);
             PotionEffect mf = p.getPotionEffect(PotionEffectType.MINING_FATIGUE);
             if (holding && fatigue) {
                 if (mf == null || mf.getAmplifier() < 3 || mf.getDuration() < 60)
@@ -195,6 +200,7 @@ public final class HoldDetector {
         for (Player p : plugin.getServer().getOnlinePlayers()) {
             modifier(p.getAttribute(Attribute.BLOCK_INTERACTION_RANGE), reachKey, 0, AttributeModifier.Operation.ADD_NUMBER);
             modifier(p.getAttribute(Attribute.MOVEMENT_SPEED), weightKey, 0, AttributeModifier.Operation.ADD_SCALAR);
+            modifier(p.getAttribute(Attribute.ATTACK_SPEED), atkKey, 0, AttributeModifier.Operation.ADD_NUMBER);
         }
     }
 

@@ -64,6 +64,7 @@ public final class FirearmsPlugin extends JavaPlugin {
                 sender.sendMessage(Component.text("Guns: " + String.join(", ", registry.gunIds()), NamedTextColor.GOLD));
                 sender.sendMessage(Component.text("Mags: " + String.join(", ", registry.magIds()), NamedTextColor.YELLOW));
                 sender.sendMessage(Component.text("Ammo: " + String.join(", ", registry.ammoIds()), NamedTextColor.GRAY));
+                sender.sendMessage(Component.text("Vests: " + String.join(", ", registry.vestIds()), NamedTextColor.AQUA));
                 return true;
             }
             case "give" -> {
@@ -78,7 +79,9 @@ public final class FirearmsPlugin extends JavaPlugin {
                 GunType g = registry.gun(id);
                 MagType m = registry.mag(id);
                 AmmoType a = registry.ammo(id);
-                if (g != null) for (int i = 0; i < amount; i++) items.add(registry.buildGun(g));
+                ArmorType v = registry.vest(id);
+                if (v != null) for (int i = 0; i < amount; i++) items.add(registry.buildVest(v));
+                else if (g != null) for (int i = 0; i < amount; i++) items.add(registry.buildGun(g));
                 else if (m != null) for (int i = 0; i < amount; i++) items.add(registry.buildMag(m, m.capacity()));
                 else if (a != null) {
                     int left = amount;
@@ -109,6 +112,7 @@ public final class FirearmsPlugin extends JavaPlugin {
                 for (GunType g : registry.guns()) sender.sendMessage(line(dir, g.model(), "gun " + g.id()));
                 for (MagType m : registry.mags()) sender.sendMessage(line(dir, m.model(), "mag " + m.id()));
                 for (AmmoType a : registry.ammos()) sender.sendMessage(line(dir, a.model(), "ammo " + a.id()));
+                for (ArmorType v : registry.vests()) sender.sendMessage(line(dir, v.model(), "vest " + v.id() + " (or " + v.model() + ".png icon)"));
                 sender.sendMessage(line(dir, getConfig().getString("craters.model", "crater"), "crater (or crater.png)"));
                 return true;
             }
@@ -134,7 +138,7 @@ public final class FirearmsPlugin extends JavaPlugin {
     private boolean deny(CommandSender s) { s.sendMessage(Component.text("No permission.", NamedTextColor.RED)); return true; }
 
     private boolean usage(CommandSender s) {
-        s.sendMessage(Component.text("/firearms list | give <gun|mag|ammo> [amount] [player] | models | pack | reload", NamedTextColor.YELLOW));
+        s.sendMessage(Component.text("/firearms list | give <gun|mag|ammo|vest> [amount] [player] | models | pack | reload", NamedTextColor.YELLOW));
         return true;
     }
 
@@ -145,6 +149,7 @@ public final class FirearmsPlugin extends JavaPlugin {
             List<String> ids = new ArrayList<>(registry.gunIds());
             ids.addAll(registry.magIds());
             ids.addAll(registry.ammoIds());
+            ids.addAll(registry.vestIds());
             return filter(ids.stream(), args[1]);
         }
         if (args.length == 4 && args[0].equalsIgnoreCase("give")) return filter(Bukkit.getOnlinePlayers().stream().map(Player::getName), args[3]);

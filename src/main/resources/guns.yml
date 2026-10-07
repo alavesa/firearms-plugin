@@ -3,7 +3,9 @@
 #  weight         kg - walk-speed penalty while held (config weight.speed-per-kg)
 #  fire-mode      semi | auto
 #  fire-rate      rounds per second (auto: spray cadence; semi: the fastest you may click)
-#  damage         hearts*2 at full strength (within hitscan-range)
+#  damage         damage dealt to whoever is shot, in HALF-hearts (4.0 = 2 hearts), at full strength (within
+#                 hitscan-range); falls off to falloff-min at range; -10%/wall layer (config penetration-damage);
+#                 a worn vest soaks part of it
 #  magazine       rounds the gun holds
 #  mag            magazine type (mags.yml) - guns can share a type. "none" = loaded round by round (pump-action)
 #  ammo           round type (mags.yml ammo:) used when mag is none (pump/tube guns)

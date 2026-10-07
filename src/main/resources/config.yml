@@ -20,6 +20,7 @@ hold:
   lead: 3.0              # fast camera turns: also show the cluster where the crosshair is heading
   linger-ticks: 3        # keep cells this long after the crosshair leaves them
   mining-fatigue: true   # hidden Mining Fatigue III while any gun is held (no cracks, no breaking)
+  no-dip: true           # huge attack_speed while a gun is held, so the gun never dips below the screen after a click
 
 # ---- Ballistics ----
 ballistics:
@@ -27,6 +28,7 @@ ballistics:
   tracer-step: 1.5       # blocks between tracer particles
   projectile-drag: 0.06  # per-tick speed loss after the hitscan range (projectile phase)
   projectile-gravity: 0.03  # per-tick downward velocity gain after the hitscan range
+  penetration-damage: 0.9   # damage multiplier per penetrable wall layer the bullet went through (0.9 = 10% less)
   # Blocks a bullet flies THROUGH if there is only ONE layer of them (a second layer in a row stops it).
   # "#name" = a vanilla block tag, otherwise a block id.
   pass-through:
@@ -57,6 +59,16 @@ craters:
   max-per-world: 400     # oldest are removed first
   model: crater          # custom_model_data string of the crater item model (you texture it)
   size: 0.35             # display scale
+
+# ---- Ballistic vests ----
+# Worn in the chest slot. hearts = extra max health while worn; absorb = share of every bullet the vest soaks
+# instead of the wearer; absorb-hearts = how many hearts of bullet damage it soaks before it is destroyed
+# (its durability bar). Give with /firearms give vest_light. Icon model = .bbmodel or <model>.png in models/.
+armor-base: LEATHER_CHESTPLATE
+armor:
+  vest_light:     { name: "&fLight Vest",     model: vest_light,     hearts: 1, absorb: 0.35, absorb-hearts: 40, color: "9AA3A8" }
+  vest_ballistic: { name: "&fBallistic Vest", model: vest_ballistic, hearts: 3, absorb: 0.55, absorb-hearts: 40, color: "5E6B5A" }
+  vest_heavy:     { name: "&fHeavy Vest",     model: vest_heavy,     hearts: 5, absorb: 0.75, absorb-hearts: 40, color: "3A3A40" }
 
 # ---- Weight ----
 weight:

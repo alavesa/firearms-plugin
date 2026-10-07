@@ -31,10 +31,11 @@ public final class Registry {
     private final Map<String, GunType> guns = new LinkedHashMap<>();
     private final Map<String, MagType> mags = new LinkedHashMap<>();
     private final Map<String, AmmoType> ammo = new LinkedHashMap<>();
+    private final Map<String, ArmorType> vests = new LinkedHashMap<>();
     /** model -> clip -> [frames, frameTicks], written by the pack generator (models/anim-index.yml). */
     private final Map<String, Map<String, int[]>> anims = new LinkedHashMap<>();
 
-    final NamespacedKey gunKey, magKey, ammoKey, roundsKey, uidKey, craterKey;
+    final NamespacedKey gunKey, magKey, ammoKey, roundsKey, uidKey, craterKey, vestKey;
 
     /** True once a gun was successfully given the adventure-mode can_break component. */
     static boolean canBreakOk = false;
@@ -49,12 +50,22 @@ public final class Registry {
         roundsKey = new NamespacedKey(plugin, "rounds");
         uidKey = new NamespacedKey(plugin, "uid");
         craterKey = new NamespacedKey(plugin, "crater");
+        vestKey = new NamespacedKey(plugin, "vest");
     }
 
     // ------------------------------------------------------------------ loading
 
     public void load() {
-        guns.clear(); mags.clear(); ammo.clear(); anims.clear();
+        guns.clear(); mags.clear(); ammo.clear(); anims.clear(); vests.clear();
+        ConfigurationSection vs = plugin.getConfig().getConfigurationSection("armor");
+        if (vs != null) for (String id : vs.getKeys(false)) {
+            ConfigurationSection s = vs.getConfigurationSection(id);
+            if (s == null) continue;
+            int color = 0x8A8A8A;
+            try { color = Integer.parseInt(s.getString("color", "8A8A8A").replace("#", ""), 16); } catch (NumberFormatException ignored) { }
+            vests.put(id.toLowerCase(), new ArmorType(id.toLowerCase(), s.getString("name", id), s.getString("model", id.toLowerCase()),
+                s.getDouble("hearts", 1), s.getDouble("absorb-hearts", 40), Math.max(0, Math.min(1, s.getDouble("absorb", 0.5))), color));
+        }
         File gf = new File(plugin.getDataFolder(), "guns.yml");
         File mf = new File(plugin.getDataFolder(), "mags.yml");
         if (!gf.exists()) plugin.saveResource("guns.yml", false);
@@ -132,6 +143,54 @@ public final class Registry {
     public java.util.Collection<GunType> guns() { return Collections.unmodifiableCollection(guns.values()); }
     public java.util.Collection<MagType> mags() { return Collections.unmodifiableCollection(mags.values()); }
     public java.util.Collection<AmmoType> ammos() { return Collections.unmodifiableCollection(ammo.values()); }
+    public ArmorType vest(String id) { return id == null ? null : vests.get(id.toLowerCase()); }
+    public List<String> vestIds() { return new ArrayList<>(vests.keySet()); }
+    public java.util.Collection<ArmorType> vests() { return Collections.unmodifiableCollection(vests.values()); }
+
+    public Material vestBase() {
+        try { return Material.valueOf(plugin.getConfig().getString("armor-base", "LEATHER_CHESTPLATE").toUpperCase()); }
+        catch (IllegalArgumentException e) { return Material.LEATHER_CHESTPLATE; }
+    }
+
+    /** A vest: dyed chestplate, custom model, +hearts max health while worn, durability = absorb-hearts (in
+     *  half-hearts), no vanilla armour points (bullets are handled by Ballistics, not the armour formula). */
+    public ItemStack buildVest(ArmorType v) {
+        ItemStack item = new ItemStack(vestBase());
+        ItemMeta meta = item.getItemMeta();
+        meta.displayName(name(v.name()));
+        meta.lore(List.of(
+            Component.text("+" + trim(v.hearts()) + " heart" + (v.hearts() == 1 ? "" : "s") + " while worn", NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false),
+            Component.text("Soaks " + Math.round(v.absorb() * 100) + "% of each bullet, " + trim(v.absorbHearts()) + " hearts before it breaks", NamedTextColor.DARK_GRAY).decoration(TextDecoration.ITALIC, false)));
+        setModel(meta, v.model());
+        if (meta instanceof org.bukkit.inventory.meta.LeatherArmorMeta lam) lam.setColor(org.bukkit.Color.fromRGB(v.color() & 0xFFFFFF));
+        meta.addAttributeModifier(org.bukkit.attribute.Attribute.MAX_HEALTH, new org.bukkit.attribute.AttributeModifier(
+            new NamespacedKey(plugin, "vest_health"), v.hearts() * 2, org.bukkit.attribute.AttributeModifier.Operation.ADD_NUMBER,
+            org.bukkit.inventory.EquipmentSlotGroup.CHEST));
+        meta.getPersistentDataContainer().set(vestKey, PersistentDataType.STRING, v.id());
+        meta.getPersistentDataContainer().set(uidKey, PersistentDataType.STRING, UUID.randomUUID().toString());
+        if (meta instanceof Damageable d) { d.setMaxDamage((int) Math.round(v.absorbHearts() * 2)); d.setDamage(0); }
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    private static String trim(double d) { return d == Math.rint(d) ? String.valueOf((long) d) : String.valueOf(d); }
+
+    public ArmorType vestOf(ItemStack it) {
+        if (it == null || !it.hasItemMeta()) return null;
+        return vest(it.getItemMeta().getPersistentDataContainer().get(vestKey, PersistentDataType.STRING));
+    }
+
+    /** Soak `halfHearts` of damage into the vest's durability. Returns true if it broke (caller removes it). */
+    public boolean damageVest(ItemStack it, double halfHearts) {
+        ItemMeta meta = it.getItemMeta();
+        if (!(meta instanceof Damageable d)) return false;
+        int max = d.hasMaxDamage() ? d.getMaxDamage() : 80;
+        int dmg = d.getDamage() + (int) Math.ceil(halfHearts);
+        if (dmg >= max) return true;
+        d.setDamage(dmg);
+        it.setItemMeta(meta);
+        return false;
+    }
 
     /** [frames, frameTicks] of a model's clip ("fire", "reload", "equip", "pump"), or null if none generated. */
     public int[] anim(String model, String clip) {
