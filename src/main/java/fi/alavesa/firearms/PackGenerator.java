@@ -82,10 +82,17 @@ public final class PackGenerator {
         for (ArmorType v : registry.vests()) vest(dir, v, done);
 
         // items/<base>.json (guns, mags, ammo, crater) and items/<armour>.json (vests): model by custom_model_data string.
-        itemsFile(registry.base().getKey().getKey(), cmdToModel);
-        itemsFile(registry.vestBase().getKey().getKey(), vestCmdToModel);
+        itemsFile(registry.base().getKey().getKey(), cmdToModel, true);
+        itemsFile(registry.vestBase().getKey().getKey(), vestCmdToModel, false);
         report.add(0, "Firearms pack report - " + new java.util.Date());
         report.add(1, "custom_model_data string  ->  model path");
+        report.add("");
+        report.add("files in " + dir.getPath() + ":");
+        File[] listing = dir.listFiles();
+        if (listing != null) for (File f : listing) report.add("  " + f.getName() + (f.getName().endsWith(".bbmodel") && !f.getName().equals(f.getName().toLowerCase(Locale.ROOT)) ? "   <- NOTE: upper-case letters; the gun's model: must match this name exactly" : ""));
+        report.add("");
+        report.add("warnings:");
+        if (warnings.isEmpty()) report.add("  none"); else for (String w : warnings) report.add("  ! " + w);
         put("pack-report.txt", String.join("\n", report));
         try { Files.writeString(new File(plugin.getDataFolder(), "pack-report.txt").toPath(), String.join("\n", report)); } catch (IOException ignored) { }
 
@@ -120,11 +127,16 @@ public final class PackGenerator {
 
     private void put(String path, String text) { files.put(path, text.getBytes(StandardCharsets.UTF_8)); }
 
-    private void itemsFile(String base, Map<String, String> map) {
+    private void itemsFile(String base, Map<String, String> map, boolean noSwapAnimation) {
         JsonArray cases = new JsonArray();
         Set<String> seen = new LinkedHashSet<>();
         for (var e : map.entrySet()) {
             if (!seen.add(e.getKey())) continue;                  // duplicate "when" would be rejected by the client
+            // Final safety net: a single bad case makes the client drop the WHOLE items file (every model purple).
+            if (!e.getValue().matches("[a-z0-9_./-]+") || !files.containsKey("assets/" + NS + "/models/item/" + e.getValue() + ".json")) {
+                warnings.add("case '" + e.getKey() + "' skipped - model path '" + e.getValue() + "' is invalid or its file was not generated");
+                continue;
+            }
             JsonObject c = new JsonObject();
             c.addProperty("when", e.getKey());
             JsonObject m = new JsonObject();
@@ -144,6 +156,10 @@ public final class PackGenerator {
         select.add("fallback", fallback);
         JsonObject root = new JsonObject();
         root.add("model", select);
+        // The client plays the hand-swap dip whenever the held stack changes (every shot changes the ammo
+        // count on the durability bar, every clip frame changes the model). This root property turns it off,
+        // so the gun stays on screen and the baked fire/reload frames are actually visible.
+        if (noSwapAnimation) root.addProperty("hand_animation_on_swap", false);
         put("assets/minecraft/items/" + base + ".json", GSON.toJson(root));
     }
 
