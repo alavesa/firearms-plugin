@@ -20,6 +20,7 @@ public final class FirearmsPlugin extends JavaPlugin {
     private Ballistics ballistics;
     private HoldDetector hold;
     private FireController controller;
+    private String duplicateJars;
 
     @Override
     public void onEnable() {
@@ -45,6 +46,25 @@ public final class FirearmsPlugin extends JavaPlugin {
             getLogger().info("Components: swing-hide " + (Registry.swingOk ? "OK" : "unsupported") + ", adventure can_break "
                 + (Registry.canBreakOk ? "OK" : "unsupported") + "; packet recoil " + (NmsRecoil.available() ? "OK" : "fallback"));
         }, 100L);
+        // The #1 reason an update "did nothing": an older Firearms-x.y.z.jar left next to the new one. Paper
+        // then loads only ONE of them (the first by name = the OLD one). Shout about it in the console and to ops.
+        File[] jars = getDataFolder().getParentFile().listFiles((d, n) -> n.toLowerCase().startsWith("firearms") && n.toLowerCase().endsWith(".jar"));
+        if (jars != null && jars.length > 1) {
+            StringBuilder sb = new StringBuilder();
+            for (File j : jars) sb.append(j.getName()).append(" ");
+            duplicateJars = sb.toString().trim();
+            getLogger().severe("=======================================================================");
+            getLogger().severe("MULTIPLE Firearms jars in plugins/: " + duplicateJars);
+            getLogger().severe("Paper only loads ONE of them (usually the OLD one). Delete the old jar and restart.");
+            getLogger().severe("=======================================================================");
+        }
+        getServer().getPluginManager().registerEvents(new org.bukkit.event.Listener() {
+            @org.bukkit.event.EventHandler
+            public void onJoin(org.bukkit.event.player.PlayerJoinEvent e) {
+                if (duplicateJars != null && e.getPlayer().hasPermission("firearms.admin"))
+                    e.getPlayer().sendMessage(Component.text("[Firearms] Several Firearms jars in plugins/ (" + duplicateJars + ") - delete the old one and restart, or updates do nothing.", NamedTextColor.RED));
+            }
+        }, this);
         getLogger().info("Firearms enabled - guns: " + registry.gunIds() + ", mags: " + registry.magIds() + ", ammo: " + registry.ammoIds()
             + ". Drop .bbmodel files into plugins/Firearms/models and run /firearms pack.");
     }
@@ -116,6 +136,7 @@ public final class FirearmsPlugin extends JavaPlugin {
                 sender.sendMessage(line(dir, getConfig().getString("craters.model", "crater"), "crater (or crater.png)"));
                 return true;
             }
+            case "version" -> { return usage(sender); }
             case "reload" -> {
                 if (!sender.hasPermission("firearms.admin")) return deny(sender);
                 reloadConfig();
@@ -138,13 +159,14 @@ public final class FirearmsPlugin extends JavaPlugin {
     private boolean deny(CommandSender s) { s.sendMessage(Component.text("No permission.", NamedTextColor.RED)); return true; }
 
     private boolean usage(CommandSender s) {
-        s.sendMessage(Component.text("/firearms list | give <gun|mag|ammo|vest> [amount] [player] | models | pack | reload", NamedTextColor.YELLOW));
+        s.sendMessage(Component.text("Firearms v" + getPluginMeta().getVersion() + (duplicateJars != null ? "  (WARNING: several jars: " + duplicateJars + ")" : ""), NamedTextColor.GOLD));
+        s.sendMessage(Component.text("/firearms list | give <gun|mag|ammo|vest> [amount] [player] | models | pack | reload | version", NamedTextColor.YELLOW));
         return true;
     }
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        if (args.length == 1) return filter(Stream.of("list", "give", "models", "pack", "reload"), args[0]);
+        if (args.length == 1) return filter(Stream.of("list", "give", "models", "pack", "reload", "version"), args[0]);
         if (args.length == 2 && args[0].equalsIgnoreCase("give")) {
             List<String> ids = new ArrayList<>(registry.gunIds());
             ids.addAll(registry.magIds());
