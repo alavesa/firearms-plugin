@@ -22,6 +22,7 @@ public final class FirearmsPlugin extends JavaPlugin {
     private FireController controller;
     private Casings casings;
     private String duplicateJars;
+    private volatile boolean packRunning = false;
 
     @Override
     public void onEnable() {
@@ -117,19 +118,34 @@ public final class FirearmsPlugin extends JavaPlugin {
                 sender.sendMessage(Component.text("Gave " + amount + " x " + id + " to " + target.getName(), NamedTextColor.GREEN));
                 return true;
             }
-            case "pack" -> {
+            case "pack", "check" -> {
                 if (!sender.hasPermission("firearms.admin")) return deny(sender);
-                try {
-                    PackGenerator.Result r = new PackGenerator(this, registry).generate();
-                    registry.load();
-                    sender.sendMessage(Component.text("Pack written: " + r.zip().getPath(), NamedTextColor.GREEN));
-                    sender.sendMessage(Component.text(r.models() + " .bbmodel converted, " + r.frames() + " animation frames baked, "
-                        + r.placeholders() + " placeholder model(s)", NamedTextColor.GRAY));
-                    for (String w : r.warnings()) sender.sendMessage(Component.text("! " + w, NamedTextColor.YELLOW));
-                } catch (Exception ex) {
-                    sender.sendMessage(Component.text("Pack generation failed: " + ex, NamedTextColor.RED));
-                    getLogger().warning("Pack generation failed: " + ex);
-                }
+                boolean dry = args[0].equalsIgnoreCase("check");
+                if (packRunning) { sender.sendMessage(Component.text("A pack build is already running.", NamedTextColor.YELLOW)); return true; }
+                packRunning = true;
+                sender.sendMessage(Component.text(dry ? "Checking models..." : "Building the pack in the background (the server keeps running)...", NamedTextColor.GRAY));
+                // Off the main thread: big models x many animation frames took long enough to freeze the server and
+                // time players out. The generator only reads immutable gun data + config, so this is safe.
+                getServer().getScheduler().runTaskAsynchronously(this, () -> {
+                    PackGenerator.Result r = null; Exception err = null;
+                    try { r = new PackGenerator(this, registry, dry).generate(); } catch (Exception ex) { err = ex; }
+                    final PackGenerator.Result res = r; final Exception e = err;
+                    getServer().getScheduler().runTask(this, () -> {
+                        packRunning = false;
+                        if (e != null) {
+                            sender.sendMessage(Component.text("Pack generation failed: " + e, NamedTextColor.RED));
+                            getLogger().warning("Pack generation failed: " + e);
+                            return;
+                        }
+                        if (!dry) registry.load();
+                        sender.sendMessage(Component.text((dry ? "Check done" : "Pack written: " + res.zip().getPath()) + "  (" + res.millis() + " ms, " + (res.bytes() / 1024) + " KB uncompressed)", NamedTextColor.GREEN));
+                        sender.sendMessage(Component.text(res.models() + " .bbmodel converted, " + res.frames() + " animation frames baked, "
+                            + res.placeholders() + " placeholder model(s)", NamedTextColor.GRAY));
+                        if (!res.biggest().isEmpty()) sender.sendMessage(Component.text("Biggest: " + String.join(", ", res.biggest()), NamedTextColor.DARK_GRAY));
+                        for (String w : res.warnings()) sender.sendMessage(Component.text("! " + w, NamedTextColor.YELLOW));
+                        if (!dry) sender.sendMessage(Component.text("Now upload/apply the NEW Firearms-pack.zip - an old pack with this new index shows purple frames while firing.", NamedTextColor.YELLOW));
+                    });
+                });
                 return true;
             }
             case "models" -> {
@@ -139,6 +155,10 @@ public final class FirearmsPlugin extends JavaPlugin {
                 for (MagType m : registry.mags()) sender.sendMessage(line(dir, m.model(), "mag " + m.id()));
                 for (AmmoType a : registry.ammos()) sender.sendMessage(line(dir, a.model(), "ammo " + a.id()));
                 for (ArmorType v : registry.vests()) sender.sendMessage(line(dir, v.model(), "vest " + v.id() + " (or " + v.model() + ".png icon)"));
+                for (GunType g : registry.guns()) {
+                    String c = registry.casingModel(g);
+                    if (c != null) sender.sendMessage(line(dir, c, "casing of " + g.id() + (c.equals(g.model() + "_casing") ? " (auto-detected)" : " - or add " + g.model() + "_casing.bbmodel")));
+                }
                 sender.sendMessage(line(dir, getConfig().getString("craters.model", "crater"), "crater (or crater.png)"));
                 return true;
             }
@@ -166,13 +186,13 @@ public final class FirearmsPlugin extends JavaPlugin {
 
     private boolean usage(CommandSender s) {
         s.sendMessage(Component.text("Firearms v" + getPluginMeta().getVersion() + (duplicateJars != null ? "  (WARNING: several jars: " + duplicateJars + ")" : ""), NamedTextColor.GOLD));
-        s.sendMessage(Component.text("/firearms list | give <gun|mag|ammo|vest> [amount] [player] | models | pack | reload | version", NamedTextColor.YELLOW));
+        s.sendMessage(Component.text("/firearms list | give <gun|mag|ammo|vest> [amount] [player] | models | pack | check | reload | version", NamedTextColor.YELLOW));
         return true;
     }
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        if (args.length == 1) return filter(Stream.of("list", "give", "models", "pack", "reload", "version"), args[0]);
+        if (args.length == 1) return filter(Stream.of("list", "give", "models", "pack", "check", "reload", "version"), args[0]);
         if (args.length == 2 && args[0].equalsIgnoreCase("give")) {
             List<String> ids = new ArrayList<>(registry.gunIds());
             ids.addAll(registry.magIds());

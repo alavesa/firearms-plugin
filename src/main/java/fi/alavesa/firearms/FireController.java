@@ -123,7 +123,7 @@ public final class FireController implements Listener {
         p.getWorld().playSound(p.getLocation(), gun.sound(), 1.2f, gun.pitch());
         Vector aim = p.getEyeLocation().getDirection();
         for (int i = 0; i < gun.pellets(); i++) ballistics.fire(p, gun, spread(p, gun), 1.0);
-        if (gun.casing() != null && !gun.casing().isEmpty() && !gun.casing().equals("none")) casings.eject(p, gun, aim);
+        if (registry.casingModel(gun) != null) casings.eject(p, gun, aim);
         recoil(p, gun);
         playClip(p, gun, item, "fire");
     }

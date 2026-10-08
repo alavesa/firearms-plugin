@@ -227,6 +227,16 @@ public final class Registry {
         return m.getOrDefault(clip, List.of());
     }
 
+    /** The casing model a gun ejects: models/<gunmodel>_casing.bbmodel if that file exists, else guns.yml casing:
+     *  (default "casing"), or null for "none". */
+    public String casingModel(GunType g) {
+        File own = new File(new File(plugin.getDataFolder(), "models"), g.model() + "_casing.bbmodel");
+        if (own.exists()) return g.model() + "_casing";
+        String c = g.casing();
+        if (c == null || c.isEmpty() || c.equalsIgnoreCase("none")) return null;
+        return c;
+    }
+
     public ItemStack buildCasing(String model) {
         ItemStack item = new ItemStack(base());
         ItemMeta meta = item.getItemMeta();

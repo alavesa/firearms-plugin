@@ -52,7 +52,7 @@ public final class Casings {
         s.spin = (float) Math.toRadians(25 + r.nextDouble() * 40);
         s.angle = (float) (r.nextDouble() * Math.PI * 2);
         s.d = at.getWorld().spawn(at, ItemDisplay.class, d -> {
-            d.setItemStack(registry.buildCasing(gun.casing()));
+            d.setItemStack(registry.buildCasing(registry.casingModel(gun)));
             d.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.FIXED);
             d.setPersistent(false);
             d.setTeleportDuration(1);

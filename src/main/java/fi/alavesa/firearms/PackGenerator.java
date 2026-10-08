@@ -42,9 +42,12 @@ import java.util.zip.ZipOutputStream;
  */
 public final class PackGenerator {
 
-    public record Result(int models, int frames, int placeholders, List<String> warnings, File zip) { }
+    public record Result(int models, int frames, int placeholders, List<String> warnings, File zip, long bytes, List<String> biggest, long millis) { }
+    private final boolean dryRun;
+    private final Map<String, Long> bytesPerModel = new LinkedHashMap<>();
+    private String currentName;
 
-    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
+    private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
     private static final String NS = "firearms";
 
     private final FirearmsPlugin plugin;
@@ -70,12 +73,17 @@ public final class PackGenerator {
         return p.isEmpty() ? "model" : p;
     }
 
-    public PackGenerator(FirearmsPlugin plugin, Registry registry) {
+    public PackGenerator(FirearmsPlugin plugin, Registry registry) { this(plugin, registry, false); }
+
+    /** dryRun = analyse only (/firearms check): nothing is written to disk. */
+    public PackGenerator(FirearmsPlugin plugin, Registry registry, boolean dryRun) {
         this.plugin = plugin;
         this.registry = registry;
+        this.dryRun = dryRun;
     }
 
     public Result generate() throws IOException {
+        long t0 = System.currentTimeMillis();
         File dir = new File(plugin.getDataFolder(), "models");
         dir.mkdirs();
         Set<String> done = new LinkedHashSet<>();
@@ -84,8 +92,9 @@ public final class PackGenerator {
         for (AmmoType a : registry.ammos()) model(dir, a.model(), "ammo", done);
         model(dir, plugin.getConfig().getString("craters.model", "crater"), "crater", done);
         Set<String> casingModels = new LinkedHashSet<>();
-        for (GunType g : registry.guns()) if (g.casing() != null && !g.casing().isEmpty() && !g.casing().equals("none")) casingModels.add(g.casing());
+        for (GunType g : registry.guns()) { String c = registry.casingModel(g); if (c != null) casingModels.add(c); }
         for (String c : casingModels) model(dir, c, "casing", done);
+        currentName = null;   // everything below is shared (items file, textures, sounds) - not one model's size
         files.put("assets/" + NS + "/textures/item/arm_pixel.png", whitePng());
         if (!soundEvents.isEmpty()) {
             JsonObject sj = new JsonObject();
@@ -116,7 +125,7 @@ public final class PackGenerator {
         report.add("warnings:");
         if (warnings.isEmpty()) report.add("  none"); else for (String w : warnings) report.add("  ! " + w);
         put("pack-report.txt", String.join("\n", report));
-        try { Files.writeString(new File(plugin.getDataFolder(), "pack-report.txt").toPath(), String.join("\n", report)); } catch (IOException ignored) { }
+        if (!dryRun) try { Files.writeString(new File(plugin.getDataFolder(), "pack-report.txt").toPath(), String.join("\n", report)); } catch (IOException ignored) { }
 
         JsonObject pack = new JsonObject();
         JsonObject p = new JsonObject();
@@ -136,20 +145,35 @@ public final class PackGenerator {
             Map<String, List<String>> sm = clipSoundIndex.get(m.getKey());
             if (sm != null && sm.containsKey(c.getKey())) idx.set(m.getKey() + "." + c.getKey() + ".sounds", sm.get(c.getKey()));
         }
-        idx.save(new File(dir, "anim-index.yml"));
-
         File zip = new File(plugin.getDataFolder(), "Firearms-pack.zip");
-        try (ZipOutputStream out = new ZipOutputStream(new FileOutputStream(zip))) {
-            for (var e : files.entrySet()) {
-                out.putNextEntry(new ZipEntry(e.getKey()));
-                out.write(e.getValue());
-                out.closeEntry();
+        long bytes = 0;
+        for (byte[] b : files.values()) bytes += b.length;
+        List<String> biggest = new ArrayList<>();
+        bytesPerModel.entrySet().stream().sorted((a, b) -> Long.compare(b.getValue(), a.getValue())).limit(6)
+            .forEach(e -> biggest.add(e.getKey() + " " + (e.getValue() / 1024) + " KB"));
+        if (!dryRun) {
+            // Write to a temp file and move it into place, so a pack being served/copied is never half-written,
+            // and write the animation index ONLY after the zip is complete: an index that is newer than the pack
+            // the players have would make clips reference frames that are not in their pack (purple gun while firing).
+            File tmp = new File(plugin.getDataFolder(), "Firearms-pack.zip.tmp");
+            try (ZipOutputStream out = new ZipOutputStream(new FileOutputStream(tmp))) {
+                for (var e : files.entrySet()) {
+                    out.putNextEntry(new ZipEntry(e.getKey()));
+                    out.write(e.getValue());
+                    out.closeEntry();
+                }
             }
+            Files.move(tmp.toPath(), zip.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            idx.save(new File(dir, "anim-index.yml"));
         }
-        return new Result(models, frames, placeholders, warnings, zip);
+        return new Result(models, frames, placeholders, warnings, zip, bytes, biggest, System.currentTimeMillis() - t0);
     }
 
-    private void put(String path, String text) { files.put(path, text.getBytes(StandardCharsets.UTF_8)); }
+    private void put(String path, String text) { putBytes(path, text.getBytes(StandardCharsets.UTF_8)); }
+    private void putBytes(String path, byte[] data) {
+        files.put(path, data);
+        if (currentName != null) bytesPerModel.merge(currentName, (long) data.length, Long::sum);
+    }
 
     private void itemsFile(String base, Map<String, String> map, boolean noSwapAnimation) {
         JsonArray cases = new JsonArray();
@@ -169,9 +193,9 @@ public final class PackGenerator {
             String fp = fpVariant.get(e.getKey());
             if (fp != null && files.containsKey("assets/" + NS + "/models/item/" + fp + ".json")) {
                 // first person -> gun + skin-tinted arms (tint k = custom_model_data.colors[k]); elsewhere the plain gun
-                JsonObject fpm = new JsonObject();
-                fpm.addProperty("type", "minecraft:model");
-                fpm.addProperty("model", NS + ":item/" + fp);
+                JsonObject armsM = new JsonObject();
+                armsM.addProperty("type", "minecraft:model");
+                armsM.addProperty("model", NS + ":item/" + fp);
                 JsonArray tints = new JsonArray();
                 int n = fpTints.getOrDefault(e.getKey(), 0);
                 for (int k = 0; k < n; k++) {
@@ -181,7 +205,13 @@ public final class PackGenerator {
                     t.addProperty("default", 0xC58C5E);
                     tints.add(t);
                 }
-                fpm.add("tints", tints);
+                armsM.add("tints", tints);
+                JsonObject fpm = new JsonObject();
+                fpm.addProperty("type", "minecraft:composite");
+                JsonArray parts = new JsonArray();
+                parts.add(m.deepCopy());
+                parts.add(armsM);
+                fpm.add("models", parts);
                 JsonObject sel = new JsonObject();
                 sel.addProperty("type", "minecraft:select");
                 sel.addProperty("property", "minecraft:display_context");
@@ -267,6 +297,7 @@ public final class PackGenerator {
     private void model(File dir, String name, String kind, Set<String> done) throws IOException {
         if (name == null || name.isEmpty() || !done.add(name)) return;
         currentGun = null;
+        currentName = name;
         if (kind.equals("gun")) for (GunType g : registry.guns()) if (g.model().equals(name)) { currentGun = g; break; }
         File bb = new File(dir, name + ".bbmodel");
         if (bb.exists()) {
@@ -329,19 +360,43 @@ public final class PackGenerator {
         if (kind.equals("gun") && currentGun != null && registry.armsEnabled(currentGun)) armsVariant(name, path(name), model);
     }
 
-    /** Write <path>_fp.json = the model plus the skin-tinted arm pixels, and remember it for the items file. */
+    /** The skin-tinted arm quads as ONE shared model per gun (<path>_arms.json); every frame of the gun is shown
+     *  in first person as a composite of [frame, arms], so the arms are not duplicated into hundreds of frames. */
     private void armsVariant(String cmd, String mpath, JsonObject model) {
-        JsonObject fp = model.deepCopy();
-        JsonObject tex = fp.getAsJsonObject("textures");
-        tex.addProperty("skin", NS + ":item/arm_pixel");
-        JsonArray elements = fp.getAsJsonArray("elements");
-        int tint = 0;
-        tint = armElements(elements, tint, true, armCfg("right"));
-        if (registry.leftArm(currentGun)) tint = armElements(elements, tint, false, armCfg("left"));
-        put("assets/" + NS + "/models/item/" + mpath + "_fp.json", GSON.toJson(fp));
-        fpVariant.put(cmd, mpath + "_fp");
-        fpTints.put(cmd, tint);
+        String armsPath = mpath + "_arms";
+        if (currentGun != null) {
+            String gunPath = path(currentGun.model());
+            armsPath = gunPath + "_arms";
+            if (!files.containsKey("assets/" + NS + "/models/item/" + armsPath + ".json")) {
+                JsonObject arms = new JsonObject();
+                JsonObject tex = new JsonObject();
+                tex.addProperty("skin", NS + ":item/arm_pixel");
+                tex.addProperty("particle", NS + ":item/arm_pixel");
+                arms.add("textures", tex);
+                JsonArray elements = new JsonArray();
+                int tint = armElements(elements, 0, true, armCfg("right"));
+                if (registry.leftArm(currentGun)) tint = armElements(elements, tint, false, armCfg("left"));
+                arms.add("elements", elements);
+                arms.add("display", model.has("display") ? model.getAsJsonObject("display").deepCopy() : defaultDisplay(1.0));
+                put("assets/" + NS + "/models/item/" + armsPath + ".json", GSON.toJson(arms));
+                armTintCount.put(armsPath, tint);
+            }
+        }
+        // The whole-gun (root bone) motion lives in each frame's display transform; the arms must follow it, so each
+        // frame gets a tiny wrapper model: parent = the shared arms geometry, display = that frame's display.
+        if (model.has("display")) {
+            JsonObject wrap = new JsonObject();
+            wrap.addProperty("parent", NS + ":item/" + armsPath);
+            wrap.add("display", model.getAsJsonObject("display").deepCopy());
+            String wrapPath = mpath + "_arms";
+            if (!wrapPath.equals(armsPath)) put("assets/" + NS + "/models/item/" + wrapPath + ".json", GSON.toJson(wrap));
+            fpVariant.put(cmd, wrapPath);
+        } else {
+            fpVariant.put(cmd, armsPath);
+        }
+        fpTints.put(cmd, armTintCount.getOrDefault(armsPath, 0));
     }
+    private final Map<String, Integer> armTintCount = new LinkedHashMap<>();
 
     private org.bukkit.configuration.ConfigurationSection armCfg(String side) {
         if (currentGun != null && currentGun.arms() != null && currentGun.arms().getConfigurationSection(side) != null) return currentGun.arms().getConfigurationSection(side);
@@ -488,6 +543,7 @@ public final class PackGenerator {
     private void convert(File bb, String name) throws IOException {
         JsonObject root = JsonParser.parseString(Files.readString(bb.toPath())).getAsJsonObject();
         final String mpath = path(name);
+        int meshes = 0;
         if (!mpath.equals(name)) warnings.add("'" + name + "' is not a valid model path - files written as '" + mpath + "' (the custom_model_data string stays '" + name + "')");
         double resW = 16, resH = 16;
         if (root.has("resolution")) {
@@ -504,7 +560,7 @@ public final class PackGenerator {
             String tname = str(t.get("name"), "tex" + ti).replaceAll("\\.png$", "").replaceAll("[^a-z0-9_]", "_").toLowerCase(Locale.ROOT);
             String src = str(t.get("source"), "");
             if (src.contains("base64,")) {
-                files.put("assets/" + NS + "/textures/item/" + mpath + "/" + tname + ".png", Base64.getDecoder().decode(src.substring(src.indexOf("base64,") + 7)));
+                putBytes("assets/" + NS + "/textures/item/" + mpath + "/" + tname + ".png", Base64.getDecoder().decode(src.substring(src.indexOf("base64,") + 7)));
             } else {
                 warnings.add(name + ": texture " + tname + " has no embedded image");
             }
@@ -521,7 +577,7 @@ public final class PackGenerator {
         Map<String, Cube> cubes = new LinkedHashMap<>();
         if (root.has("elements")) for (JsonElement ee : root.getAsJsonArray("elements")) {
             JsonObject e = ee.getAsJsonObject();
-            if (e.has("type") && !"cube".equals(str(e.get("type"), "cube"))) continue;
+            if (e.has("type") && !"cube".equals(str(e.get("type"), "cube"))) { meshes++; continue; }
             if (e.has("visibility") && !e.get("visibility").getAsBoolean()) continue;
             Cube c = new Cube();
             c.uuid = str(e.get("uuid"), "e" + cubes.size());
@@ -531,6 +587,8 @@ public final class PackGenerator {
             c.faces = e.has("faces") ? e.getAsJsonObject("faces") : new JsonObject();
             cubes.put(c.uuid, c);
         }
+        if (meshes > 0) warnings.add(name + ": " + meshes + " MESH element(s) skipped - Java item models only support cubes; convert meshes to cubes in Blockbench");
+        if (cubes.isEmpty()) throw new IOException("no cube elements");
         // --- bones
         List<Bone> top = new ArrayList<>();
         Map<String, Bone> bones = new HashMap<>();
@@ -620,7 +678,10 @@ public final class PackGenerator {
                     }
                 }
             }
-            int n = (int) Math.max(1, Math.min(60, Math.ceil(clip.length * 20.0 / frameTicks)));
+            int maxFrames = Math.max(2, plugin.getConfig().getInt("anim.max-frames", 40));
+            int clipTicks = frameTicks;
+            int n = (int) Math.max(1, Math.ceil(clip.length * 20.0 / clipTicks));
+            if (n > maxFrames) { clipTicks = (int) Math.ceil(clip.length * 20.0 / maxFrames); n = (int) Math.max(1, Math.ceil(clip.length * 20.0 / clipTicks)); }
             for (int i = 1; i <= n; i++) {
                 double t = n == 1 ? clip.length : (i - 1) * (clip.length / (n - 1));
                 boolean flashFrame = key.equals("fire") && i <= Math.max(0, plugin.getConfig().getInt("flash.frames", 1));
@@ -631,7 +692,7 @@ public final class PackGenerator {
                 if (arms) armsVariant(fname, mpath + "_" + key + "_" + i, frame);
                 frames++;
             }
-            clips.put(key, new int[]{n, frameTicks});
+            clips.put(key, new int[]{n, clipTicks});
             if (!clipSounds.isEmpty()) clipSoundIndex.computeIfAbsent(name, x -> new LinkedHashMap<>()).put(key, clipSounds);
         }
         if (!clips.isEmpty()) animIndex.put(name, clips);

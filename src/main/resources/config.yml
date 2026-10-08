@@ -126,6 +126,7 @@ accuracy:
 # ---- First-person animations (frames generated from .bbmodel animations by /firearms pack) ----
 anim:
   frame-ticks: 1
+  max-frames: 40         # cap per clip (longer animations get coarser frames) - keeps the pack small
   # If the baked whole-gun (root bone) motion comes out mirrored in first person, flip the sign per axis here.
   root-rotation-sign: [1, 1, 1]
   root-position-sign: [1, 1, 1]
