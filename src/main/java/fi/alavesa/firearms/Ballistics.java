@@ -277,7 +277,8 @@ public final class Ballistics {
         Location cell = muzzle.getBlock().getLocation();
         if (!cell.getBlock().getType().isAir()) return;
         BlockData light = Material.LIGHT.createBlockData();
-        if (light instanceof org.bukkit.block.data.Levelled lv) lv.setLevel(Math.max(1, Math.min(15, plugin.getConfig().getInt("flash.level", 15))));
+        double brightness = Math.max(0.1, Math.min(1.0, plugin.getConfig().getDouble("flash.brightness", 0.65)));
+        if (light instanceof org.bukkit.block.data.Levelled lv) lv.setLevel(Math.max(1, Math.min(15, (int) Math.round(plugin.getConfig().getInt("flash.level", 15) * brightness))));
         double range = plugin.getConfig().getDouble("flash.range", 32);
         List<Player> viewers = new ArrayList<>();
         for (Player v : muzzle.getWorld().getPlayers()) if (v.getLocation().distanceSquared(muzzle) <= range * range) { v.sendBlockChange(cell, light); viewers.add(v); }

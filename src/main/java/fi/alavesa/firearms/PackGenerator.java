@@ -473,12 +473,13 @@ public final class PackGenerator {
         return e;
     }
 
-    private static byte[] flashPng() throws IOException {
+    private byte[] flashPng() throws IOException {
+        double brightness = Math.max(0.1, Math.min(1.0, plugin.getConfig().getDouble("flash.brightness", 0.65)));
         BufferedImage img = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
         for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) {
             double d = Math.hypot(x - 7.5, y - 7.5) / 7.5;
-            int a = d > 1 ? 0 : (int) (255 * Math.pow(1 - d, 1.5));
-            int g = 200 + (int) (55 * (1 - d)), b = (int) (120 * (1 - d));
+            int a = d > 1 ? 0 : (int) (255 * brightness * Math.pow(1 - d, 1.8));
+            int g = 170 + (int) (60 * (1 - d)), b = (int) (70 * (1 - d));
             img.setRGB(x, y, (a << 24) | (255 << 16) | (g << 8) | b);
         }
         ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -533,7 +534,7 @@ public final class PackGenerator {
     }
 
     private static final class Cube {
-        String uuid; double[] from, to, origin = {0, 0, 0}, rotation = {0, 0, 0}; JsonObject faces; Bone bone;
+        String uuid; double[] from, to, origin = {0, 0, 0}, rotation = {0, 0, 0}; double inflate = 0; JsonObject faces; Bone bone;
     }
 
     private static final class Clip {
@@ -583,6 +584,7 @@ public final class PackGenerator {
             c.uuid = str(e.get("uuid"), "e" + cubes.size());
             c.from = vec(e.get("from")); c.to = vec(e.get("to"));
             if (e.has("origin")) c.origin = vec(e.get("origin"));
+            if (e.has("inflate")) c.inflate = num(e.get("inflate"), 0);
             if (e.has("rotation")) c.rotation = vec(e.get("rotation"));
             c.faces = e.has("faces") ? e.getAsJsonObject("faces") : new JsonObject();
             cubes.put(c.uuid, c);
@@ -593,9 +595,10 @@ public final class PackGenerator {
         List<Bone> top = new ArrayList<>();
         Map<String, Bone> bones = new HashMap<>();
         if (root.has("outliner")) for (JsonElement oe : root.getAsJsonArray("outliner")) parseOutliner(oe, null, top, bones, cubes);
-        Bone rootBone = null;
-        int best = 0;
-        for (Bone b : top) { int n = countCubes(b); if (n > best) { best = n; rootBone = b; } }
+        // The "display bone": per animation, the top-level group that is ANIMATED and holds the most cubes. Its motion
+        // becomes the first-person display transform (exact). Guns whose animated root was not the biggest group
+        // used to get their whole-gun motion baked into cubes (torn apart) - this picks the right bone per clip.
+        final List<Bone> topBones = top;
 
         // --- scale to the Java range [-16, 32]
         double[] mn = {1e9, 1e9, 1e9}, mx = {-1e9, -1e9, -1e9};
@@ -629,7 +632,7 @@ public final class PackGenerator {
         double[] flashAt = flashSpot(name, cubes);
 
         // --- rest model
-        JsonObject rest = bake(name, cubes, bones, rootBone, textures, texIndex, texRes, display, null, 0, S, null);
+        JsonObject rest = bake(name, cubes, bones, null, textures, texIndex, texRes, display, null, 0, S, null);
         put("assets/" + NS + "/models/item/" + mpath + ".json", GSON.toJson(rest));
         cmdToModel.put(name, mpath);
         boolean arms = currentGun != null && registry.armsEnabled(currentGun);
@@ -685,7 +688,7 @@ public final class PackGenerator {
             for (int i = 1; i <= n; i++) {
                 double t = n == 1 ? clip.length : (i - 1) * (clip.length / (n - 1));
                 boolean flashFrame = key.equals("fire") && i <= Math.max(0, plugin.getConfig().getInt("flash.frames", 1));
-                JsonObject frame = bake(name, cubes, bones, rootBone, textures, texIndex, texRes, display, clip, t, S, flashFrame ? flashAt : null);
+                JsonObject frame = bake(name, cubes, bones, pickRoot(topBones, clip), textures, texIndex, texRes, display, clip, t, S, flashFrame ? flashAt : null);
                 String fname = name + "_" + key + "_" + i;
                 put("assets/" + NS + "/models/item/" + mpath + "_" + key + "_" + i + ".json", GSON.toJson(frame));
                 cmdToModel.put(fname, mpath + "_" + key + "_" + i);
@@ -731,10 +734,10 @@ public final class PackGenerator {
 
     /** One baked bone: single-axis snapped rotation about its pivot + exact translation. */
     private static final class Baked {
-        int axis = -1; double angle = 0;   // snapped rotation (Java: one axis, multiples of 22.5, |angle| <= 45)
-        double[] pivot;                    // where that rotation happens, in parent-translated space
-        double[][] noRot;                  // world transform WITHOUT any rotation (translations only)
-        double[][] full;                   // world transform with the snapped rotations applied
+        int axis = -1; double angle = 0;   // residual rotation (one Java axis, 22.5 steps, |a| <= 45) about pivot
+        double[] pivot;
+        double[][] coarse;                 // world transform with translations + the EXACT 90-degree parts only
+        int[][] perm;                      // accumulated signed permutation (orientation) for face remapping
     }
 
     private static int countCubes(Bone b) {
@@ -743,36 +746,94 @@ public final class PackGenerator {
         return n;
     }
 
+    /** The bone whose animated motion goes into the display transform for this clip. */
+    private static Bone pickRoot(List<Bone> top, Clip clip) {
+        Bone best = null; int bestN = 0;
+        for (Bone b : top) {
+            boolean animated = clip.rot.containsKey(b.uuid) || clip.pos.containsKey(b.uuid);
+            if (!animated) continue;
+            int n = countCubes(b);
+            if (n > bestN) { bestN = n; best = b; }
+        }
+        if (best == null) for (Bone b : top) { int n = countCubes(b); if (n > bestN) { bestN = n; best = b; } }
+        return best;
+    }
+
+    /** Any rotation = an exact multiple-of-90 part (a box stays a box: handled by permuting axes) + a small residual
+     *  that a Java cube can carry (one axis, 22.5 steps). Blockbench groups/cubes rotated 90, -30, 180... were the
+     *  "pieces floating above the gun": they got clamped to 45 before. */
     private Baked bakeBone(Bone b, Map<Bone, Baked> cache, Map<Bone, double[]> rot, Map<Bone, double[]> pos, String name, Set<String> warned) {
         Baked done = cache.get(b);
         if (done != null) return done;
         Baked parent = b.parent == null ? null : bakeBone(b.parent, cache, rot, pos, name, warned);
         double[] r = rot.getOrDefault(b, new double[]{0, 0, 0}), p = pos.getOrDefault(b, new double[]{0, 0, 0});
-        Baked out = new Baked();
+        double[][] R = rot3(r);
+        int[][] P = nearestPerm(R);
+        double[] eul = euler3(mul3(transpose3(P), R));
         int axis = 0;
-        for (int i = 1; i < 3; i++) if (Math.abs(r[i]) > Math.abs(r[axis])) axis = i;
-        double raw = r[axis];
+        for (int i = 1; i < 3; i++) if (Math.abs(eul[i]) > Math.abs(eul[axis])) axis = i;
+        double raw = eul[axis];
         double snapped = Math.max(-45, Math.min(45, Math.round(raw / 22.5) * 22.5));
         boolean multi = false;
-        for (int i = 0; i < 3; i++) if (i != axis && Math.abs(r[i]) > 1) multi = true;
-        if (multi && warned.add(b.name + ":multi")) warnings.add(name + ": bone '" + b.name + "' rotates on several axes - Java cubes allow one, using " + "xyz".charAt(axis));
-        if (Math.abs(raw) > 46 && warned.add(b.name + ":clamp")) warnings.add(name + ": bone '" + b.name + "' rotates " + Math.round(raw) + " deg - clamped to 45 (Java limit)");
-        double[][] parentNoRot = parent == null ? identity() : parent.noRot;
-        double[][] parentFull = parent == null ? identity() : parent.full;
-        double[][] shift = translate(p[0], p[1], p[2]);
-        out.noRot = mul(parentNoRot, shift);
+        for (int i = 0; i < 3; i++) if (i != axis && Math.abs(eul[i]) > 3) multi = true;
+        if (multi && warned.add(b.name + ":multi")) warnings.add(name + ": group '" + b.name + "' has a rotation on several axes at once - Java cubes keep one, the rest is approximated");
+        if (Math.abs(raw - snapped) > 6 && warned.add(b.name + ":snap")) warnings.add(name + ": group '" + b.name + "' rotation " + Math.round(r[axis]) + " deg rounded to the nearest 22.5 step (Java limit)");
+        Baked out = new Baked();
+        double[][] parentCoarse = parent == null ? identity() : parent.coarse;
+        int[][] parentPerm = parent == null ? identityPerm() : parent.perm;
         double[] pivotLocal = {b.origin[0] + p[0], b.origin[1] + p[1], b.origin[2] + p[2]};
-        out.pivot = apply(parentNoRot, pivotLocal);
-        if (snapped != 0) {
-            out.axis = axis; out.angle = snapped;
-            double[] e = {0, 0, 0}; e[axis] = snapped;
-            out.full = mul(parentFull, mul(mul(translate(pivotLocal[0], pivotLocal[1], pivotLocal[2]), rotZYX(e)), translate(-b.origin[0], -b.origin[1], -b.origin[2])));
-        } else {
-            out.full = mul(parentFull, shift);
-        }
+        out.pivot = apply(parentCoarse, pivotLocal);
+        out.coarse = mul(parentCoarse, mul(mul(translate(pivotLocal[0], pivotLocal[1], pivotLocal[2]), perm4(P)), translate(-b.origin[0], -b.origin[1], -b.origin[2])));
+        out.perm = mul3i(parentPerm, P);
+        if (snapped != 0) { out.axis = axis; out.angle = snapped; }
         cache.put(b, out);
         return out;
     }
+
+    // --- face conventions (direction, texture up, texture right) for remapping rotated cubes
+    private static final String[] FACE = {"north", "south", "east", "west", "up", "down"};
+    private static final int[][] DIR   = {{0,0,-1},{0,0,1},{1,0,0},{-1,0,0},{0,1,0},{0,-1,0}};
+    private static final int[][] FUP   = {{0,1,0},{0,1,0},{0,1,0},{0,1,0},{0,0,-1},{0,0,1}};
+    private static final int[][] FRIGHT= {{-1,0,0},{1,0,0},{0,0,-1},{0,0,1},{1,0,0},{1,0,0}};
+
+    private static int faceIndex(int[] dir) {
+        for (int i = 0; i < 6; i++) if (DIR[i][0] == dir[0] && DIR[i][1] == dir[1] && DIR[i][2] == dir[2]) return i;
+        return 0;
+    }
+    private static int[] applyPerm(int[][] P, int[] v) {
+        return new int[]{ P[0][0]*v[0]+P[0][1]*v[1]+P[0][2]*v[2], P[1][0]*v[0]+P[1][1]*v[1]+P[1][2]*v[2], P[2][0]*v[0]+P[2][1]*v[1]+P[2][2]*v[2] };
+    }
+    private static int dot(int[] a, int[] b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+
+    /** Remap a cube's faces after its orientation changed by the signed permutation P: new face name, and the
+     *  texture rotation / mirror needed so the texture still reads the same way. */
+    private static JsonObject remapFaces(JsonObject faces, int[][] P) {
+        boolean identity = true;
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) if (P[i][j] != (i == j ? 1 : 0)) identity = false;
+        if (identity) return faces;
+        JsonObject out = new JsonObject();
+        for (int i = 0; i < 6; i++) {
+            if (!faces.has(FACE[i])) continue;
+            JsonObject f = faces.getAsJsonObject(FACE[i]).deepCopy();
+            int ni = faceIndex(applyPerm(P, DIR[i]));
+            int[] up = applyPerm(P, FUP[i]), right = applyPerm(P, FRIGHT[i]);
+            int k;   // texture rotation so the old "up" lands where it should
+            if (dot(up, FUP[ni]) > 0) k = 0; else if (dot(up, FRIGHT[ni]) > 0) k = 90; else if (dot(up, FUP[ni]) < 0) k = 180; else k = 270;
+            int[] expectRight = switch (k) { case 0 -> FRIGHT[ni]; case 90 -> neg(FUP[ni]); case 180 -> neg(FRIGHT[ni]); default -> FUP[ni]; };
+            boolean mirror = dot(right, expectRight) < 0;
+            int rotation = (int) ((f.has("rotation") ? num(f.get("rotation"), 0) : 0) + k) % 360;
+            if (rotation != 0) f.addProperty("rotation", rotation); else f.remove("rotation");
+            if (mirror && f.has("uv")) {
+                JsonArray uv = f.getAsJsonArray("uv");
+                double u1 = num(uv.get(0), 0), u2 = num(uv.get(2), 0);
+                JsonArray n = new JsonArray(); n.add(u2); n.add(num(uv.get(1), 0)); n.add(u1); n.add(num(uv.get(3), 0));
+                f.add("uv", n);
+            }
+            out.add(FACE[ni], f);
+        }
+        return out;
+    }
+    private static int[] neg(int[] v) { return new int[]{-v[0], -v[1], -v[2]}; }
 
     /** Build one model: rest pose (clip == null) or the clip sampled at time t. Bone rotations are snapped to
      *  what a Java cube can do (one axis, 22.5 deg steps) and the SAME snapped rotation is applied to every cube
@@ -796,26 +857,42 @@ public final class PackGenerator {
         JsonArray elements = new JsonArray();
         for (Cube c : cubes.values()) {
             Baked bb = c.bone == null ? null : bakeBone(c.bone, baked, rot, pos, name, warned);
-            // The ONE rotation a Java cube gets: the nearest rotated bone up the chain (angles on the same axis
-            // further up are folded in), else the cube's own rest rotation.
+            // The ONE residual rotation a Java cube gets: the nearest rotated bone up the chain (same-axis angles
+            // further up are folded in), else the cube's own residual. Exact 90-degree parts are already in `place`.
             int axis = -1; double angle = 0; double[] pivot = null;
-            double[][] place = bb == null ? identity() : bb.noRot;   // translations only; the rotation is re-applied by the element
+            double[][] place = bb == null ? identity() : bb.coarse;
+            int[][] perm = bb == null ? identityPerm() : bb.perm;
             for (Bone w = c.bone; w != null; w = w.parent) {
                 Baked wb = baked.get(w);
                 if (wb == null || wb.axis < 0) continue;
                 if (axis < 0) { axis = wb.axis; angle = wb.angle; pivot = wb.pivot; }
                 else if (wb.axis == axis) angle = Math.max(-45, Math.min(45, angle + wb.angle));
-                else if (warned.add(c.uuid + ":nest")) warnings.add(name + ": nested bones rotate on different axes around '" + w.name + "' - approximated");
+                else if (warned.add(c.uuid + ":nest")) warnings.add(name + ": nested groups rotate on different axes around '" + w.name + "' - approximated");
             }
-            if (c.rotation[0] != 0 || c.rotation[1] != 0 || c.rotation[2] != 0) {
-                int ca = 0;
-                for (int i = 1; i < 3; i++) if (Math.abs(c.rotation[i]) > Math.abs(c.rotation[ca])) ca = i;
-                double cs = Math.max(-45, Math.min(45, Math.round(c.rotation[ca] / 22.5) * 22.5));
+            // the cube's own rotation: exact 90-degree part about its origin + residual
+            double[][] Re = rot3(c.rotation);
+            int[][] Pe = nearestPerm(Re);
+            double[] eulE = euler3(mul3(transpose3(Pe), Re));
+            int ca = 0;
+            for (int i = 1; i < 3; i++) if (Math.abs(eulE[i]) > Math.abs(eulE[ca])) ca = i;
+            double cs = Math.max(-45, Math.min(45, Math.round(eulE[ca] / 22.5) * 22.5));
+            if (cs != 0) {
                 if (axis < 0) { axis = ca; angle = cs; pivot = apply(place, c.origin); }
                 else if (ca == axis) angle = Math.max(-45, Math.min(45, angle + cs));
             }
-            double[] from = apply(place, c.from), to = apply(place, c.to);
-            for (int i = 0; i < 3; i++) if (from[i] > to[i]) { double x = from[i]; from[i] = to[i]; to[i] = x; }
+            if (Math.abs(eulE[ca] - cs) > 6 && clip == null && warned.add(c.uuid + ":snap")) warnings.add(name + ": a cube rotated " + Math.round(c.rotation[ca]) + " deg was rounded to the nearest 22.5 step");
+            // box: inflate, rotate the corners by the cube's exact 90-degree part about its origin, then place
+            double[] lo = {1e9, 1e9, 1e9}, hi = {-1e9, -1e9, -1e9};
+            for (int corner = 0; corner < 8; corner++) {
+                double[] v = { ((corner & 1) == 0 ? c.from[0] - c.inflate : c.to[0] + c.inflate) - c.origin[0],
+                               ((corner & 2) == 0 ? c.from[1] - c.inflate : c.to[1] + c.inflate) - c.origin[1],
+                               ((corner & 4) == 0 ? c.from[2] - c.inflate : c.to[2] + c.inflate) - c.origin[2] };
+                double[] w = { Pe[0][0]*v[0]+Pe[0][1]*v[1]+Pe[0][2]*v[2] + c.origin[0], Pe[1][0]*v[0]+Pe[1][1]*v[1]+Pe[1][2]*v[2] + c.origin[1], Pe[2][0]*v[0]+Pe[2][1]*v[1]+Pe[2][2]*v[2] + c.origin[2] };
+                double[] q = apply(place, w);
+                for (int i = 0; i < 3; i++) { lo[i] = Math.min(lo[i], q[i]); hi[i] = Math.max(hi[i], q[i]); }
+            }
+            double[] from = lo, to = hi;
+            JsonObject cfaces = remapFaces(c.faces, mul3i(perm, Pe));
             JsonObject rotation = null;
             if (axis >= 0 && angle != 0) {
                 rotation = new JsonObject();
@@ -835,8 +912,8 @@ public final class PackGenerator {
             if (rotation != null) e.add("rotation", rotation);
             JsonObject faces = new JsonObject();
             for (String f : new String[]{"north", "south", "east", "west", "up", "down"}) {
-                if (!c.faces.has(f)) continue;
-                JsonObject bf = c.faces.getAsJsonObject(f);
+                if (!cfaces.has(f)) continue;
+                JsonObject bf = cfaces.getAsJsonObject(f);
                 JsonElement tex = bf.get("texture");
                 if (tex == null || tex.isJsonNull()) continue;
                 Integer idx = tex.isJsonPrimitive() && tex.getAsJsonPrimitive().isNumber() ? Integer.valueOf(tex.getAsInt()) : texIndex.get(tex.getAsString());
@@ -945,6 +1022,55 @@ public final class PackGenerator {
         if (dp.isEmpty()) return new double[]{0, 0, 0};
         JsonObject p = dp.get(0).getAsJsonObject();
         return new double[]{ num(p.get("x"), 0), num(p.get("y"), 0), num(p.get("z"), 0) };
+    }
+
+    // ------------------------------------------------------------------ 3x3 rotation helpers
+    private static double[][] rot3(double[] deg) {
+        double[][] m = rotZYX(deg);
+        return new double[][]{{m[0][0], m[0][1], m[0][2]}, {m[1][0], m[1][1], m[1][2]}, {m[2][0], m[2][1], m[2][2]}};
+    }
+    private static double[][] mul3(double[][] a, double[][] b) {
+        double[][] r = new double[3][3];
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) { double x = 0; for (int k = 0; k < 3; k++) x += a[i][k] * b[k][j]; r[i][j] = x; }
+        return r;
+    }
+    private static double[][] transpose3(int[][] p) {
+        double[][] r = new double[3][3];
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) r[i][j] = p[j][i];
+        return r;
+    }
+    private static int[][] identityPerm() { return new int[][]{{1,0,0},{0,1,0},{0,0,1}}; }
+    private static int[][] mul3i(int[][] a, int[][] b) {
+        int[][] r = new int[3][3];
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) { int x = 0; for (int k = 0; k < 3; k++) x += a[i][k] * b[k][j]; r[i][j] = x; }
+        return r;
+    }
+    private static double[][] perm4(int[][] p) {
+        double[][] m = identity();
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) m[i][j] = p[i][j];
+        return m;
+    }
+    /** The signed axis permutation (a rotation by multiples of 90 degrees) nearest to R; identity if R is not close
+     *  to one on some axis (then everything goes to the residual). */
+    private static int[][] nearestPerm(double[][] R) {
+        int[][] P = new int[3][3];
+        boolean[] usedCol = new boolean[3];
+        for (int i = 0; i < 3; i++) {
+            int bj = 0;
+            for (int j = 1; j < 3; j++) if (Math.abs(R[i][j]) > Math.abs(R[i][bj])) bj = j;
+            if (usedCol[bj] || Math.abs(R[i][bj]) < 0.5) return identityPerm();
+            usedCol[bj] = true;
+            P[i][bj] = R[i][bj] >= 0 ? 1 : -1;
+        }
+        // must be a proper rotation (det +1); a reflection means the pick was wrong -> fall back
+        int det = P[0][0]*(P[1][1]*P[2][2]-P[1][2]*P[2][1]) - P[0][1]*(P[1][0]*P[2][2]-P[1][2]*P[2][0]) + P[0][2]*(P[1][0]*P[2][1]-P[1][1]*P[2][0]);
+        return det == 1 ? P : identityPerm();
+    }
+    private static double[] euler3(double[][] m) {
+        double y = Math.asin(Math.max(-1, Math.min(1, -m[2][0])));
+        double x = Math.atan2(m[2][1], m[2][2]);
+        double z = Math.atan2(m[1][0], m[0][0]);
+        return new double[]{ Math.toDegrees(x), Math.toDegrees(y), Math.toDegrees(z) };
     }
 
     // ------------------------------------------------------------------ tiny matrix helpers (4x4, row-major)

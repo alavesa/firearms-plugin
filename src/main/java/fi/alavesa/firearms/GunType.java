@@ -30,7 +30,8 @@ public record GunType(
     org.bukkit.configuration.ConfigurationSection display,  // optional first/third-person display override (guns.yml display:)
     String casing,          // casing model (custom_model_data string), "" = no casings
     double[] eject,         // ejection port: right, up, forward (blocks) from the eye
-    org.bukkit.configuration.ConfigurationSection arms      // per-gun first-person arms override (guns.yml arms:)
+    org.bukkit.configuration.ConfigurationSection arms,     // per-gun first-person arms override (guns.yml arms:)
+    double equipSeconds     // draw time: the equip clip is stretched/compressed to this and the gun can't fire meanwhile (0 = clip length / 0.5 s)
 ) {
     public long shotIntervalMs() { return fireRate <= 0 ? 1000 : Math.round(1000.0 / fireRate); }
     public boolean usesMag() { return magId != null && !magId.isEmpty() && !magId.equalsIgnoreCase("none"); }

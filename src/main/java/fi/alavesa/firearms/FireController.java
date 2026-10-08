@@ -52,6 +52,7 @@ public final class FireController implements Listener {
     private final Set<UUID> reloadingPump = ConcurrentHashMap.newKeySet();
     private final Map<UUID, List<BukkitTask>> animTasks = new ConcurrentHashMap<>();
     private final Map<UUID, Long> lastShotTick = new ConcurrentHashMap<>();
+    private final Map<UUID, Integer> drawUntil = new ConcurrentHashMap<>();   // server tick until which the gun is still being drawn
 
     public FireController(FirearmsPlugin plugin, Registry registry, Ballistics ballistics, Casings casings) {
         this.plugin = plugin;
@@ -107,6 +108,8 @@ public final class FireController implements Listener {
         long now = System.currentTimeMillis();
         Long last = lastSwing.put(id, now);
         if (reloadingMag.contains(id)) return;                       // a magazine swap cannot be interrupted
+        Integer du = drawUntil.get(id);
+        if (du != null && plugin.getServer().getCurrentTick() < du) return;   // still drawing the gun: no shooting
         if (!gun.auto() && last != null && now - last < 150) return; // semi: ignore the per-tick hold stream
         Long next = nextShotAt.get(id);
         if (next != null && now < next) return;                      // fire-rate
@@ -355,7 +358,10 @@ public final class FireController implements Listener {
             if (registry.gunOf(held) == gun) {
                 refreshArms(p);
                 p.playSound(p.getLocation(), "minecraft:item.armor.equip_chain", 0.5f, 1.5f);
-                playClip(p, gun, held, "equip");
+                int[] a = registry.anim(gun.model(), "equip");
+                int ticks = gun.equipSeconds() > 0 ? (int) Math.round(gun.equipSeconds() * 20) : a != null ? a[0] * a[1] : 10;
+                drawUntil.put(p.getUniqueId(), plugin.getServer().getCurrentTick() + ticks);
+                playClip(p, gun, held, "equip", ticks);
             }
         });
     }
@@ -365,15 +371,20 @@ public final class FireController implements Listener {
         cancelReload(event.getPlayer());
         cancelClip(event.getPlayer());
         UUID id = event.getPlayer().getUniqueId();
-        nextShotAt.remove(id); lastSwing.remove(id); lastShotTick.remove(id);
+        nextShotAt.remove(id); lastSwing.remove(id); lastShotTick.remove(id); drawUntil.remove(id);
     }
 
     // ------------------------------------------------------------------ first-person clips
 
     /** Flip the held gun through <model>_<clip>_1..N (frames generated from the .bbmodel animation). */
-    private void playClip(Player p, GunType gun, ItemStack item, String clip) {
+    private void playClip(Player p, GunType gun, ItemStack item, String clip) { playClip(p, gun, item, clip, 0); }
+
+    /** totalTicks > 0 stretches/compresses the clip to that length (equip-seconds); the last frame holds until then. */
+    private void playClip(Player p, GunType gun, ItemStack item, String clip, int totalTicks) {
         int[] a = registry.anim(gun.model(), clip);
         if (a == null) return;
+        if (totalTicks > 0) a = new int[]{ a[0], Math.max(1, (int) Math.round((double) totalTicks / a[0])) };
+        final int holdUntil = Math.max(totalTicks, a[0] * a[1]);
         cancelClip(p);
         int slot = p.getInventory().getHeldItemSlot();
         String uid = uid(item);
@@ -400,7 +411,7 @@ public final class FireController implements Listener {
             animTasks.remove(p.getUniqueId());
             ItemStack cur = p.getInventory().getItem(slot);
             if (uid.equals(uid(cur))) registry.setModel(cur, gun.model());
-        }, (long) a[0] * a[1]));
+        }, holdUntil));
         animTasks.put(p.getUniqueId(), tasks);
     }
 

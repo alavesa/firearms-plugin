@@ -73,7 +73,7 @@ casings:
 # extends 12 px "up" its own axis and is rotated about pos (one axis, 22.5 deg steps - a Java model limit).
 # Override per gun in guns.yml with the same `arms:` layout. Also `arms.right.rotation`, `arms.left.rotation`.
 arms:
-  enabled: true
+  enabled: false         # OFF by default: model the hands in the .bbmodel itself; turn on for skin-coloured arms
   right: { enabled: true,  pos: [10.5, 1, 11.5], rotation: [-45, 0, 0] }
   left:  { enabled: false, pos: [5.5, 3, 4],      rotation: [-45, 0, 22.5] }
 
@@ -102,7 +102,8 @@ armor:
 # room lights up for a split second. The shot's tracer also starts at the muzzle (per gun `muzzle: right,up,forward`).
 flash:
   frames: 1
-  size: 3.0              # flash cube size in model pixels
+  size: 2.5              # flash cube size in model pixels
+  brightness: 0.65       # 0.1 - 1.0: texture opacity and light level of the flash
   light: true
   level: 15
   ticks: 2

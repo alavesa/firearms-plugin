@@ -28,6 +28,12 @@ public final class FirearmsPlugin extends JavaPlugin {
     public void onEnable() {
         saveDefaultConfig();
         new File(getDataFolder(), "models").mkdirs();
+        // 0.7: first-person arms are OFF by default (model hands in the .bbmodel). Flip an existing config once.
+        if (!getConfig().getBoolean("arms-default-off", false)) {
+            getConfig().set("arms.enabled", false);
+            getConfig().set("arms-default-off", true);
+            saveConfig();
+        }
         registry = new Registry(this);
         registry.load();
         ballistics = new Ballistics(this, registry);

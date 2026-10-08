@@ -124,7 +124,8 @@ public final class Registry {
                 s.getConfigurationSection("display"),
                 s.getString("casing", "casing").toLowerCase(),
                 triple(s.getString("eject", "0.25,-0.15,0.4"), new double[]{0.25, -0.15, 0.4}),
-                s.getConfigurationSection("arms")));
+                s.getConfigurationSection("arms"),
+                s.getDouble("equip-seconds", 0)));
         }
         // Animation frame index written by the pack generator.
         File ai = new File(new File(plugin.getDataFolder(), "models"), "anim-index.yml");
@@ -248,11 +249,11 @@ public final class Registry {
     /** Does this gun get first-person arms (guns.yml arms.enabled, else config arms.enabled)? */
     public boolean armsEnabled(GunType g) {
         if (g.arms() != null && g.arms().contains("enabled")) return g.arms().getBoolean("enabled");
-        return plugin.getConfig().getBoolean("arms.enabled", true);
+        return plugin.getConfig().getBoolean("arms.enabled", false);
     }
     public boolean leftArm(GunType g) {
         if (g.arms() != null && g.arms().contains("left.enabled")) return g.arms().getBoolean("left.enabled");
-        return plugin.getConfig().getBoolean("arms.left.enabled", false);
+        return plugin.getConfig().getBoolean("arms.left.enabled", false);   // arms are OFF by default since 0.7: model hands in the .bbmodel
     }
 
     /** Write the holder's skin pixel colours into the gun's custom_model_data.colors (the arms' tints). */
