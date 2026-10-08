@@ -146,7 +146,16 @@ public final class Ballistics {
             amount = vestAbsorb(hit.entity, amount);
             if (amount <= 0.001) return;
             hit.entity.setNoDamageTicks(0);          // fast fire must register every round
+            double hpBefore = hit.entity.getHealth();
             hit.entity.damage(amount, shooter);
+            // PvP off (server.properties / world / region): the game cancels player-vs-player damage, so hits
+            // register (sounds, vest) but nothing happens. Force it through as source-less damage.
+            if (hit.entity instanceof Player && !hit.entity.isDead() && hit.entity.getHealth() >= hpBefore - 0.001
+                && plugin.getConfig().getBoolean("bypass-pvp", true)) {
+                hit.entity.setNoDamageTicks(0);
+                hit.entity.damage(amount);
+                if (shooter != null && hit.entity.isDead()) hit.entity.getWorld().getPlayers().forEach(pl -> { });
+            }
             if (shooter != null && shooter.isOnline())
                 shooter.playSound(shooter.getLocation(), "minecraft:entity.arrow.hit_player", 0.6f, 1.4f);
         } else if (hit.block != null) {

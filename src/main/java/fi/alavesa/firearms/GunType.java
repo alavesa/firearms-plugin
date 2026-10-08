@@ -27,7 +27,10 @@ public record GunType(
     float pitch,
     double[] muzzle,        // where the tracer / flash starts: right, up, forward (blocks) from the eye
     double[] flashAt,       // muzzle flash position in MODEL pixels for the baked fire frames, or null = auto
-    org.bukkit.configuration.ConfigurationSection display   // optional first/third-person display override (guns.yml display:)
+    org.bukkit.configuration.ConfigurationSection display,  // optional first/third-person display override (guns.yml display:)
+    String casing,          // casing model (custom_model_data string), "" = no casings
+    double[] eject,         // ejection port: right, up, forward (blocks) from the eye
+    org.bukkit.configuration.ConfigurationSection arms      // per-gun first-person arms override (guns.yml arms:)
 ) {
     public long shotIntervalMs() { return fireRate <= 0 ? 1000 : Math.round(1000.0 / fireRate); }
     public boolean usesMag() { return magId != null && !magId.isEmpty() && !magId.equalsIgnoreCase("none"); }

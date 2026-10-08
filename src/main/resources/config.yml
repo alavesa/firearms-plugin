@@ -52,6 +52,31 @@ ballistics:
     - LIGHT
     - STRUCTURE_VOID
 
+# When the server/world has PvP disabled the game cancels every player-vs-player hit, so shots register (sound,
+# vest) but do no damage. With this on, bullets are forced through anyway as source-less damage. Turn it off and
+# enable real PvP if you want vanilla kill credit / death messages.
+bypass-pvp: true
+
+# ---- Shell casings ----
+casings:
+  enabled: true
+  seconds: 8             # how long a casing lies on the ground
+  scale: 0.35
+  max: 300               # oldest are removed first
+# per gun: casing: <model> (default "casing", models/casing.bbmodel or a placeholder), eject: "right,up,forward"
+
+# ---- First-person ARMS with the player's own skin ----
+# One pack for everyone: each arm is built from one tiny quad per skin pixel, each with its own tint index, and the
+# plugin writes the holder's skin colours into the gun's custom_model_data.colors (fetched from the player's
+# profile; Steve colours if the skin can't be fetched, e.g. offline-mode). Only shown in first person.
+# Positions are in MODEL PIXELS of the gun: pos = where the HAND end of the 4x12x4 arm box sits, the arm then
+# extends 12 px "up" its own axis and is rotated about pos (one axis, 22.5 deg steps - a Java model limit).
+# Override per gun in guns.yml with the same `arms:` layout. Also `arms.right.rotation`, `arms.left.rotation`.
+arms:
+  enabled: true
+  right: { enabled: true,  pos: [10.5, 1, 11.5], rotation: [-45, 0, 0] }
+  left:  { enabled: false, pos: [5.5, 3, 4],      rotation: [-45, 0, 22.5] }
+
 # ---- Craters (bullet holes) ----
 craters:
   enabled: true

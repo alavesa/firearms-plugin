@@ -42,6 +42,7 @@ public final class FireController implements Listener {
     private final FirearmsPlugin plugin;
     private final Registry registry;
     private final Ballistics ballistics;
+    private final Casings casings;
     private final NamespacedKey capKey, magTypeKey;
 
     private final Map<UUID, Long> nextShotAt = new ConcurrentHashMap<>();
@@ -52,10 +53,11 @@ public final class FireController implements Listener {
     private final Map<UUID, List<BukkitTask>> animTasks = new ConcurrentHashMap<>();
     private final Map<UUID, Long> lastShotTick = new ConcurrentHashMap<>();
 
-    public FireController(FirearmsPlugin plugin, Registry registry, Ballistics ballistics) {
+    public FireController(FirearmsPlugin plugin, Registry registry, Ballistics ballistics, Casings casings) {
         this.plugin = plugin;
         this.registry = registry;
         this.ballistics = ballistics;
+        this.casings = casings;
         this.capKey = new NamespacedKey(plugin, "cap");
         this.magTypeKey = new NamespacedKey(plugin, "magtype");
     }
@@ -119,7 +121,9 @@ public final class FireController implements Listener {
         lastShotTick.put(id, (long) plugin.getServer().getCurrentTick());
         registry.setRounds(item, rounds - 1, capacity(item, gun));
         p.getWorld().playSound(p.getLocation(), gun.sound(), 1.2f, gun.pitch());
+        Vector aim = p.getEyeLocation().getDirection();
         for (int i = 0; i < gun.pellets(); i++) ballistics.fire(p, gun, spread(p, gun), 1.0);
+        if (gun.casing() != null && !gun.casing().isEmpty() && !gun.casing().equals("none")) casings.eject(p, gun, aim);
         recoil(p, gun);
         playClip(p, gun, item, "fire");
     }
@@ -349,6 +353,7 @@ public final class FireController implements Listener {
         plugin.getServer().getScheduler().runTask(plugin, () -> {
             ItemStack held = p.getInventory().getItem(event.getNewSlot());
             if (registry.gunOf(held) == gun) {
+                refreshArms(p);
                 p.playSound(p.getLocation(), "minecraft:item.armor.equip_chain", 0.5f, 1.5f);
                 playClip(p, gun, held, "equip");
             }
@@ -381,12 +386,33 @@ public final class FireController implements Listener {
                 registry.setModel(cur, gun.model() + "_" + clip + "_" + frame);
             }, (long) (i - 1) * a[1]));
         }
+        // Sound keyframes from the .bbmodel (effects animator -> sounds.json by /firearms pack).
+        for (String snd : registry.animSounds(gun.model(), clip)) {
+            int colon = snd.indexOf(':');
+            if (colon <= 0) continue;
+            long at; try { at = Long.parseLong(snd.substring(0, colon)); } catch (NumberFormatException e) { continue; }
+            String id = snd.substring(colon + 1);
+            tasks.add(plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+                if (p.isOnline() && uid.equals(uid(p.getInventory().getItem(slot)))) p.getWorld().playSound(p.getLocation(), id, 1f, 1f);
+            }, at));
+        }
         tasks.add(plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
             animTasks.remove(p.getUniqueId());
             ItemStack cur = p.getInventory().getItem(slot);
             if (uid.equals(uid(cur))) registry.setModel(cur, gun.model());
         }, (long) a[0] * a[1]));
         animTasks.put(p.getUniqueId(), tasks);
+    }
+
+    /** Put the player's skin colours on every gun they carry (the first-person arms). Safe to call often. */
+    public void refreshArms(Player p) {
+        if (!ArmSkin.ready(p.getUniqueId())) { ArmSkin.load(plugin, p, () -> refreshArms(p)); return; }
+        PlayerInventory inv = p.getInventory();
+        for (int i = 0; i < inv.getSize(); i++) {
+            ItemStack it = inv.getItem(i);
+            GunType g = registry.gunOf(it);
+            if (g != null && registry.applySkin(it, g, p)) inv.setItem(i, it);
+        }
     }
 
     private void cancelClip(Player p) {

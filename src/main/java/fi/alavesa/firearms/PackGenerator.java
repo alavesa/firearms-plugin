@@ -53,8 +53,13 @@ public final class PackGenerator {
     private final Map<String, byte[]> files = new LinkedHashMap<>();       // zip path -> bytes
     private final Map<String, String> cmdToModel = new LinkedHashMap<>();  // custom_model_data -> model path
     private final Map<String, Map<String, int[]>> animIndex = new LinkedHashMap<>();
+    private final Map<String, Map<String, List<String>>> clipSoundIndex = new LinkedHashMap<>();
     private int frames = 0, placeholders = 0, models = 0;
     private final Map<String, String> vestCmdToModel = new LinkedHashMap<>();   // vests live on the armour item
+    private final Map<String, String> fpVariant = new LinkedHashMap<>();        // cmd string -> first-person model path (gun + arms)
+    private final Map<String, Integer> fpTints = new LinkedHashMap<>();         // cmd string -> number of arm tint indices
+    private final Map<String, List<String>> soundEvents = new LinkedHashMap<>();// sound event -> files
+    private GunType currentGun;
     private final List<String> report = new ArrayList<>();
 
     /** A resource-location-safe path for a model name. Minecraft rejects the WHOLE items file if any case
@@ -78,6 +83,21 @@ public final class PackGenerator {
         for (MagType m : registry.mags()) model(dir, m.model(), "mag", done);
         for (AmmoType a : registry.ammos()) model(dir, a.model(), "ammo", done);
         model(dir, plugin.getConfig().getString("craters.model", "crater"), "crater", done);
+        Set<String> casingModels = new LinkedHashSet<>();
+        for (GunType g : registry.guns()) if (g.casing() != null && !g.casing().isEmpty() && !g.casing().equals("none")) casingModels.add(g.casing());
+        for (String c : casingModels) model(dir, c, "casing", done);
+        files.put("assets/" + NS + "/textures/item/arm_pixel.png", whitePng());
+        if (!soundEvents.isEmpty()) {
+            JsonObject sj = new JsonObject();
+            for (var e : soundEvents.entrySet()) {
+                JsonObject ev = new JsonObject();
+                JsonArray arr = new JsonArray();
+                for (String f : e.getValue()) arr.add(NS + ":" + f);
+                ev.add("sounds", arr);
+                sj.add(e.getKey(), ev);
+            }
+            put("assets/" + NS + "/sounds.json", GSON.toJson(sj));
+        }
 
         for (ArmorType v : registry.vests()) vest(dir, v, done);
         File customFlash = new File(dir, "muzzle_flash.png");
@@ -113,6 +133,8 @@ public final class PackGenerator {
         for (var m : animIndex.entrySet()) for (var c : m.getValue().entrySet()) {
             idx.set(m.getKey() + "." + c.getKey() + ".frames", c.getValue()[0]);
             idx.set(m.getKey() + "." + c.getKey() + ".frame-ticks", c.getValue()[1]);
+            Map<String, List<String>> sm = clipSoundIndex.get(m.getKey());
+            if (sm != null && sm.containsKey(c.getKey())) idx.set(m.getKey() + "." + c.getKey() + ".sounds", sm.get(c.getKey()));
         }
         idx.save(new File(dir, "anim-index.yml"));
 
@@ -144,9 +166,42 @@ public final class PackGenerator {
             JsonObject m = new JsonObject();
             m.addProperty("type", "minecraft:model");
             m.addProperty("model", NS + ":item/" + e.getValue());
-            c.add("model", m);
+            String fp = fpVariant.get(e.getKey());
+            if (fp != null && files.containsKey("assets/" + NS + "/models/item/" + fp + ".json")) {
+                // first person -> gun + skin-tinted arms (tint k = custom_model_data.colors[k]); elsewhere the plain gun
+                JsonObject fpm = new JsonObject();
+                fpm.addProperty("type", "minecraft:model");
+                fpm.addProperty("model", NS + ":item/" + fp);
+                JsonArray tints = new JsonArray();
+                int n = fpTints.getOrDefault(e.getKey(), 0);
+                for (int k = 0; k < n; k++) {
+                    JsonObject t = new JsonObject();
+                    t.addProperty("type", "minecraft:custom_model_data");
+                    t.addProperty("index", k);
+                    t.addProperty("default", 0xC58C5E);
+                    tints.add(t);
+                }
+                fpm.add("tints", tints);
+                JsonObject sel = new JsonObject();
+                sel.addProperty("type", "minecraft:select");
+                sel.addProperty("property", "minecraft:display_context");
+                JsonArray sc = new JsonArray();
+                JsonObject fpCase = new JsonObject();
+                JsonArray when = new JsonArray();
+                when.add("firstperson_righthand");
+                when.add("firstperson_lefthand");
+                fpCase.add("when", when);
+                fpCase.add("model", fpm);
+                sc.add(fpCase);
+                sel.add("cases", sc);
+                sel.add("fallback", m);
+                c.add("model", sel);
+                report.add(base + ": \"" + e.getKey() + "\" -> " + NS + ":item/" + e.getValue() + "  (first person: " + fp + ", " + n + " skin tints)");
+            } else {
+                c.add("model", m);
+                report.add(base + ": \"" + e.getKey() + "\" -> " + NS + ":item/" + e.getValue());
+            }
             cases.add(c);
-            report.add(base + ": \"" + e.getKey() + "\" -> " + NS + ":item/" + e.getValue());
         }
         JsonObject select = new JsonObject();
         select.addProperty("type", "minecraft:select");
@@ -211,6 +266,8 @@ public final class PackGenerator {
 
     private void model(File dir, String name, String kind, Set<String> done) throws IOException {
         if (name == null || name.isEmpty() || !done.add(name)) return;
+        currentGun = null;
+        if (kind.equals("gun")) for (GunType g : registry.guns()) if (g.model().equals(name)) { currentGun = g; break; }
         File bb = new File(dir, name + ".bbmodel");
         if (bb.exists()) {
             try {
@@ -245,6 +302,11 @@ public final class PackGenerator {
                 tex.addProperty("particle", "minecraft:block/iron_block");
                 elements.add(cube(new double[]{6.5, 3, 7}, new double[]{9.5, 13, 9}, "#0", new double[]{0, 0, 4, 10}, null));
             }
+            case "casing" -> {
+                tex.addProperty("0", "minecraft:block/raw_gold_block");
+                tex.addProperty("particle", "minecraft:block/raw_gold_block");
+                elements.add(cube(new double[]{7.4, 7, 6}, new double[]{8.6, 8.2, 10}, "#0", new double[]{0, 0, 2, 5}, null));
+            }
             case "ammo" -> {
                 tex.addProperty("0", "minecraft:block/gold_block");
                 tex.addProperty("particle", "minecraft:block/gold_block");
@@ -264,6 +326,80 @@ public final class PackGenerator {
         model.add("display", defaultDisplay(1.0));
         put("assets/" + NS + "/models/item/" + path(name) + ".json", GSON.toJson(model));
         cmdToModel.put(name, path(name));
+        if (kind.equals("gun") && currentGun != null && registry.armsEnabled(currentGun)) armsVariant(name, path(name), model);
+    }
+
+    /** Write <path>_fp.json = the model plus the skin-tinted arm pixels, and remember it for the items file. */
+    private void armsVariant(String cmd, String mpath, JsonObject model) {
+        JsonObject fp = model.deepCopy();
+        JsonObject tex = fp.getAsJsonObject("textures");
+        tex.addProperty("skin", NS + ":item/arm_pixel");
+        JsonArray elements = fp.getAsJsonArray("elements");
+        int tint = 0;
+        tint = armElements(elements, tint, true, armCfg("right"));
+        if (registry.leftArm(currentGun)) tint = armElements(elements, tint, false, armCfg("left"));
+        put("assets/" + NS + "/models/item/" + mpath + "_fp.json", GSON.toJson(fp));
+        fpVariant.put(cmd, mpath + "_fp");
+        fpTints.put(cmd, tint);
+    }
+
+    private org.bukkit.configuration.ConfigurationSection armCfg(String side) {
+        if (currentGun != null && currentGun.arms() != null && currentGun.arms().getConfigurationSection(side) != null) return currentGun.arms().getConfigurationSection(side);
+        return plugin.getConfig().getConfigurationSection("arms." + side);
+    }
+
+    /** One thin quad per skin pixel on the visible faces of a 4x12x4 arm box: hand end at `pos`, extending 12 px
+     *  up its own axis, rotated about `pos` (snapped to one Java axis / 22.5 steps). Returns the next tint index. */
+    private int armElements(JsonArray elements, int tint, boolean right, org.bukkit.configuration.ConfigurationSection cfg) {
+        double[] pos = cfg == null ? new double[]{right ? 10.5 : 5.5, 1, 11.5} : list3(cfg, "pos", new double[]{right ? 10.5 : 5.5, 1, 11.5});
+        double[] rot = cfg == null ? new double[]{-45, 0, 0} : list3(cfg, "rotation", new double[]{-45, 0, 0});
+        int axis = 0;
+        for (int i = 1; i < 3; i++) if (Math.abs(rot[i]) > Math.abs(rot[axis])) axis = i;
+        double angle = Math.max(-45, Math.min(45, Math.round(rot[axis] / 22.5) * 22.5));
+        JsonObject rotation = null;
+        if (angle != 0) {
+            rotation = new JsonObject();
+            rotation.add("origin", arr(pos));
+            rotation.addProperty("axis", axis == 0 ? "x" : axis == 1 ? "y" : "z");
+            rotation.addProperty("angle", angle);
+        }
+        double x0 = pos[0] - 2, y0 = pos[1], z0 = pos[2] - 2;   // box x0..x0+4, y0..y0+12 (hand at y0), z0..z0+4
+        for (ArmSkin.Pixel px : ArmSkin.pixels(right)) {
+            int c = px.col(), r = px.row();
+            double[] from, to; String dir;
+            switch (px.face()) {
+                case "front" -> { from = new double[]{x0 + c, y0 + 11 - r, z0 - 0.01}; to = new double[]{x0 + c + 1, y0 + 12 - r, z0 + 0.0}; dir = "north"; }
+                case "back"  -> { from = new double[]{x0 + 3 - c, y0 + 11 - r, z0 + 4}; to = new double[]{x0 + 4 - c, y0 + 12 - r, z0 + 4.01}; dir = "south"; }
+                case "outer" -> { if (right) { from = new double[]{x0 + 4, y0 + 11 - r, z0 + c}; to = new double[]{x0 + 4.01, y0 + 12 - r, z0 + c + 1}; dir = "east"; }
+                                  else       { from = new double[]{x0 - 0.01, y0 + 11 - r, z0 + 3 - c}; to = new double[]{x0, y0 + 12 - r, z0 + 4 - c}; dir = "west"; } }
+                case "inner" -> { if (right) { from = new double[]{x0 - 0.01, y0 + 11 - r, z0 + 3 - c}; to = new double[]{x0, y0 + 12 - r, z0 + 4 - c}; dir = "west"; }
+                                  else       { from = new double[]{x0 + 4, y0 + 11 - r, z0 + c}; to = new double[]{x0 + 4.01, y0 + 12 - r, z0 + c + 1}; dir = "east"; } }
+                default      -> { from = new double[]{x0 + c, y0 + 12, z0 + r}; to = new double[]{x0 + c + 1, y0 + 12.01, z0 + r + 1}; dir = "up"; }   // top (shoulder)
+            }
+            JsonObject e = new JsonObject();
+            e.add("from", arr(from));
+            e.add("to", arr(to));
+            if (rotation != null) e.add("rotation", rotation);
+            e.addProperty("shade", false);
+            JsonObject faces = new JsonObject();
+            JsonObject f = new JsonObject();
+            f.add("uv", arr(0, 0, 16, 16));
+            f.addProperty("texture", "#skin");
+            f.addProperty("tintindex", tint);
+            faces.add(dir, f);
+            e.add("faces", faces);
+            elements.add(e);
+            tint++;
+        }
+        return tint;
+    }
+
+    private static byte[] whitePng() throws IOException {
+        BufferedImage img = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) img.setRGB(x, y, 0xFFFFFFFF);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ImageIO.write(img, "png", out);
+        return out.toByteArray();
     }
 
     private static JsonObject cube(double[] from, double[] to, String texture, double[] uv, JsonObject rotation) {
@@ -438,6 +574,8 @@ public final class PackGenerator {
         JsonObject rest = bake(name, cubes, bones, rootBone, textures, texIndex, texRes, display, null, 0, S, null);
         put("assets/" + NS + "/models/item/" + mpath + ".json", GSON.toJson(rest));
         cmdToModel.put(name, mpath);
+        boolean arms = currentGun != null && registry.armsEnabled(currentGun);
+        if (arms) armsVariant(name, mpath, rest);
 
         // --- animations -> frames
         int frameTicks = Math.max(1, plugin.getConfig().getInt("anim.frame-ticks", 1));
@@ -449,6 +587,7 @@ public final class PackGenerator {
             clip.length = num(a.get("length"), 0);
             String key = clipKey(clip.name);
             if (clips.containsKey(key)) { warnings.add(name + ": animation '" + clip.name + "' ignored - '" + key + "' already has one"); continue; }
+            List<String> clipSounds = new ArrayList<>();
             if (a.has("animators")) for (var en : a.getAsJsonObject("animators").entrySet()) {
                 JsonObject an = en.getValue().getAsJsonObject();
                 if (!an.has("keyframes")) continue;
@@ -457,6 +596,28 @@ public final class PackGenerator {
                     String ch = str(k.get("channel"), "");
                     if (ch.equals("rotation")) clip.rot.computeIfAbsent(en.getKey(), x -> new ArrayList<>()).add(k);
                     else if (ch.equals("position")) clip.pos.computeIfAbsent(en.getKey(), x -> new ArrayList<>()).add(k);
+                    else if (ch.equals("sound")) {
+                        // Blockbench "Effects" animator: {effect: "name", file: "C:/.../name.ogg"}. The audio is NOT
+                        // inside the .bbmodel, so it is looked up in models/sounds/<name>.ogg (or the keyframe's path).
+                        JsonArray dp = k.has("data_points") ? k.getAsJsonArray("data_points") : new JsonArray();
+                        for (JsonElement de : dp) {
+                            JsonObject d = de.getAsJsonObject();
+                            String file = str(d.get("file"), "");
+                            String ev = str(d.get("effect"), "");
+                            if (ev.isEmpty() && !file.isEmpty()) ev = new File(file).getName().replaceAll("\\.ogg$", "");
+                            if (ev.isEmpty()) continue;
+                            String sname = ev.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_]", "_");
+                            File ogg = new File(new File(bb.getParentFile(), "sounds"), sname + ".ogg");
+                            if (!ogg.exists()) ogg = new File(bb.getParentFile(), sname + ".ogg");
+                            if (!ogg.exists() && !file.isEmpty() && new File(file).exists()) ogg = new File(file);
+                            if (!ogg.exists()) { warnings.add(name + ": sound '" + ev + "' in animation '" + clip.name + "' - put " + sname + ".ogg into models/sounds/"); continue; }
+                            files.put("assets/" + NS + "/sounds/" + sname + ".ogg", Files.readAllBytes(ogg.toPath()));
+                            soundEvents.computeIfAbsent(sname, x -> new ArrayList<>());
+                            if (!soundEvents.get(sname).contains(sname)) soundEvents.get(sname).add(sname);
+                            long tick = Math.round(num(k.get("time"), 0) * 20);
+                            clipSounds.add(tick + ":" + NS + ":" + sname);
+                        }
+                    }
                 }
             }
             int n = (int) Math.max(1, Math.min(60, Math.ceil(clip.length * 20.0 / frameTicks)));
@@ -467,9 +628,11 @@ public final class PackGenerator {
                 String fname = name + "_" + key + "_" + i;
                 put("assets/" + NS + "/models/item/" + mpath + "_" + key + "_" + i + ".json", GSON.toJson(frame));
                 cmdToModel.put(fname, mpath + "_" + key + "_" + i);
+                if (arms) armsVariant(fname, mpath + "_" + key + "_" + i, frame);
                 frames++;
             }
             clips.put(key, new int[]{n, frameTicks});
+            if (!clipSounds.isEmpty()) clipSoundIndex.computeIfAbsent(name, x -> new LinkedHashMap<>()).put(key, clipSounds);
         }
         if (!clips.isEmpty()) animIndex.put(name, clips);
     }

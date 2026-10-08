@@ -20,6 +20,7 @@ public final class FirearmsPlugin extends JavaPlugin {
     private Ballistics ballistics;
     private HoldDetector hold;
     private FireController controller;
+    private Casings casings;
     private String duplicateJars;
 
     @Override
@@ -30,14 +31,18 @@ public final class FirearmsPlugin extends JavaPlugin {
         registry.load();
         ballistics = new Ballistics(this, registry);
         hold = new HoldDetector(this, registry);
-        controller = new FireController(this, registry, ballistics);
+        casings = new Casings(this, registry);
+        controller = new FireController(this, registry, ballistics, casings);
         getServer().getPluginManager().registerEvents(controller, this);
+        getServer().getScheduler().runTaskTimer(this, casings::tick, 1L, 1L);
         getServer().getScheduler().runTaskTimer(this, hold::tick, 1L, 1L);
         getServer().getScheduler().runTaskTimer(this, hold::poll, 20L, 5L);
         getServer().getScheduler().runTaskTimer(this, ballistics::tick, 1L, 1L);
         getServer().getPluginManager().registerEvents(new org.bukkit.event.Listener() {
             @org.bukkit.event.EventHandler
-            public void onQuit(org.bukkit.event.player.PlayerQuitEvent e) { hold.forget(e.getPlayer().getUniqueId()); }
+            public void onQuit(org.bukkit.event.player.PlayerQuitEvent e) { hold.forget(e.getPlayer().getUniqueId()); ArmSkin.forget(e.getPlayer().getUniqueId()); }
+            @org.bukkit.event.EventHandler
+            public void onJoinSkin(org.bukkit.event.player.PlayerJoinEvent e) { ArmSkin.load(FirearmsPlugin.this, e.getPlayer(), () -> controller.refreshArms(e.getPlayer())); }
         }, this);
         // Probe the item components once the server is fully up (the item-string parser is not usable during enable).
         getServer().getScheduler().runTaskLater(this, () -> {
@@ -74,6 +79,7 @@ public final class FirearmsPlugin extends JavaPlugin {
         if (controller != null) controller.shutdown();
         if (hold != null) hold.clearAll();
         if (ballistics != null) ballistics.clearAll();
+        if (casings != null) casings.clearAll();
     }
 
     @Override
@@ -101,7 +107,7 @@ public final class FirearmsPlugin extends JavaPlugin {
                 AmmoType a = registry.ammo(id);
                 ArmorType v = registry.vest(id);
                 if (v != null) for (int i = 0; i < amount; i++) items.add(registry.buildVest(v));
-                else if (g != null) for (int i = 0; i < amount; i++) items.add(registry.buildGun(g));
+                else if (g != null) for (int i = 0; i < amount; i++) { ItemStack gi = registry.buildGun(g); registry.applySkin(gi, g, target); items.add(gi); }
                 else if (m != null) for (int i = 0; i < amount; i++) items.add(registry.buildMag(m, m.capacity()));
                 else if (a != null) {
                     int left = amount;

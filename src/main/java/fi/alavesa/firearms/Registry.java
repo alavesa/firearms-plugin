@@ -34,6 +34,8 @@ public final class Registry {
     private final Map<String, ArmorType> vests = new LinkedHashMap<>();
     /** model -> clip -> [frames, frameTicks], written by the pack generator (models/anim-index.yml). */
     private final Map<String, Map<String, int[]>> anims = new LinkedHashMap<>();
+    /** model -> clip -> ["tick:sound", ...] from the .bbmodel sound keyframes. */
+    private final Map<String, Map<String, List<String>>> animSounds = new LinkedHashMap<>();
 
     final NamespacedKey gunKey, magKey, ammoKey, roundsKey, uidKey, craterKey, vestKey;
 
@@ -56,7 +58,7 @@ public final class Registry {
     // ------------------------------------------------------------------ loading
 
     public void load() {
-        guns.clear(); mags.clear(); ammo.clear(); anims.clear(); vests.clear();
+        guns.clear(); mags.clear(); ammo.clear(); anims.clear(); vests.clear(); animSounds.clear();
         ConfigurationSection vs = plugin.getConfig().getConfigurationSection("armor");
         if (vs != null) for (String id : vs.getKeys(false)) {
             ConfigurationSection s = vs.getConfigurationSection(id);
@@ -119,7 +121,10 @@ public final class Registry {
                 (float) s.getDouble("pitch", 1.6),
                 triple(s.getString("muzzle", "0.35,-0.22,0.7"), new double[]{0.35, -0.22, 0.7}),
                 s.contains("flash") ? triple(s.getString("flash", ""), null) : null,
-                s.getConfigurationSection("display")));
+                s.getConfigurationSection("display"),
+                s.getString("casing", "casing").toLowerCase(),
+                triple(s.getString("eject", "0.25,-0.15,0.4"), new double[]{0.25, -0.15, 0.4}),
+                s.getConfigurationSection("arms")));
         }
         // Animation frame index written by the pack generator.
         File ai = new File(new File(plugin.getDataFolder(), "models"), "anim-index.yml");
@@ -129,10 +134,13 @@ public final class Registry {
                 ConfigurationSection s = a.getConfigurationSection(model);
                 if (s == null) continue;
                 Map<String, int[]> clips = new LinkedHashMap<>();
+                Map<String, List<String>> snd = new LinkedHashMap<>();
                 for (String clip : s.getKeys(false)) {
                     clips.put(clip, new int[]{ s.getInt(clip + ".frames", 0), Math.max(1, s.getInt(clip + ".frame-ticks", 1)) });
+                    if (s.contains(clip + ".sounds")) snd.put(clip, s.getStringList(clip + ".sounds"));
                 }
                 anims.put(model, clips);
+                animSounds.put(model, snd);
             }
         }
     }
@@ -210,6 +218,48 @@ public final class Registry {
         if (c == null) return null;
         int[] a = c.get(clip);
         return a == null || a[0] <= 0 ? null : a;
+    }
+
+    /** "tick:firearms:sound" entries of a clip, or an empty list. */
+    public List<String> animSounds(String model, String clip) {
+        Map<String, List<String>> m = animSounds.get(model);
+        if (m == null) return List.of();
+        return m.getOrDefault(clip, List.of());
+    }
+
+    public ItemStack buildCasing(String model) {
+        ItemStack item = new ItemStack(base());
+        ItemMeta meta = item.getItemMeta();
+        setModel(meta, model == null || model.isEmpty() ? "casing" : model);
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    /** Does this gun get first-person arms (guns.yml arms.enabled, else config arms.enabled)? */
+    public boolean armsEnabled(GunType g) {
+        if (g.arms() != null && g.arms().contains("enabled")) return g.arms().getBoolean("enabled");
+        return plugin.getConfig().getBoolean("arms.enabled", true);
+    }
+    public boolean leftArm(GunType g) {
+        if (g.arms() != null && g.arms().contains("left.enabled")) return g.arms().getBoolean("left.enabled");
+        return plugin.getConfig().getBoolean("arms.left.enabled", false);
+    }
+
+    /** Write the holder's skin pixel colours into the gun's custom_model_data.colors (the arms' tints). */
+    public boolean applySkin(ItemStack gun, GunType type, org.bukkit.entity.Player holder) {
+        if (!armsEnabled(type)) return false;
+        List<org.bukkit.Color> colors = ArmSkin.colors(holder.getUniqueId(), leftArm(type));
+        if (colors == null) return false;
+        ItemMeta meta = gun.getItemMeta();
+        if (meta == null) return false;
+        NamespacedKey skinOf = new NamespacedKey(plugin, "skin_of");
+        if (holder.getUniqueId().toString().equals(meta.getPersistentDataContainer().get(skinOf, PersistentDataType.STRING))) return false;
+        var cmd = meta.getCustomModelDataComponent();
+        cmd.setColors(colors);
+        meta.setCustomModelDataComponent(cmd);
+        meta.getPersistentDataContainer().set(skinOf, PersistentDataType.STRING, holder.getUniqueId().toString());
+        gun.setItemMeta(meta);
+        return true;
     }
 
     // ------------------------------------------------------------------ items
