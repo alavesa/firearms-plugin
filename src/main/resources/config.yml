@@ -70,6 +70,19 @@ armor:
   vest_ballistic: { name: "&fBallistic Vest", model: vest_ballistic, hearts: 3, absorb: 0.55, absorb-hearts: 40, color: "5E6B5A" }
   vest_heavy:     { name: "&fHeavy Vest",     model: vest_heavy,     hearts: 5, absorb: 0.75, absorb-hearts: 40, color: "3A3A40" }
 
+# ---- Muzzle flash ----
+# Two parts. (1) Baked into the fire animation frames by /firearms pack: a glowing cube at the muzzle (per gun
+# `flash: x,y,z` in model pixels, default = the front/north end of the model) on the first `frames` fire frames.
+# (2) A light-15 LIGHT block shown CLIENT-SIDE at the muzzle for `ticks` ticks to everyone within `range`, so the
+# room lights up for a split second. The shot's tracer also starts at the muzzle (per gun `muzzle: right,up,forward`).
+flash:
+  frames: 1
+  size: 3.0              # flash cube size in model pixels
+  light: true
+  level: 15
+  ticks: 2
+  range: 32
+
 # ---- Weight ----
 weight:
   speed-per-kg: 0.012    # walk-speed penalty per kg while the gun is held (3 kg = -3.6 %)
@@ -88,6 +101,9 @@ accuracy:
 # ---- First-person animations (frames generated from .bbmodel animations by /firearms pack) ----
 anim:
   frame-ticks: 1
+  # If the baked whole-gun (root bone) motion comes out mirrored in first person, flip the sign per axis here.
+  root-rotation-sign: [1, 1, 1]
+  root-position-sign: [1, 1, 1]
 
 # ---- Resource pack generator ----
 pack:

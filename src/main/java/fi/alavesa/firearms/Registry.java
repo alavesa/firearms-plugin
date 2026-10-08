@@ -116,7 +116,10 @@ public final class Registry {
                 s.getDouble("falloff-min", 0.4),
                 Math.max(1, s.getInt("pellets", 1)),
                 s.getString("sound", "minecraft:block.anvil.land"),
-                (float) s.getDouble("pitch", 1.6)));
+                (float) s.getDouble("pitch", 1.6),
+                triple(s.getString("muzzle", "0.35,-0.22,0.7"), new double[]{0.35, -0.22, 0.7}),
+                s.contains("flash") ? triple(s.getString("flash", ""), null) : null,
+                s.getConfigurationSection("display")));
         }
         // Animation frame index written by the pack generator.
         File ai = new File(new File(plugin.getDataFolder(), "models"), "anim-index.yml");
@@ -132,6 +135,15 @@ public final class Registry {
                 anims.put(model, clips);
             }
         }
+    }
+
+    /** "a,b,c" -> double[3], or def when it does not parse. */
+    static double[] triple(String v, double[] def) {
+        if (v == null) return def;
+        String[] parts = v.replace("[", "").replace("]", "").split(",");
+        if (parts.length != 3) return def;
+        try { return new double[]{ Double.parseDouble(parts[0].trim()), Double.parseDouble(parts[1].trim()), Double.parseDouble(parts[2].trim()) }; }
+        catch (NumberFormatException e) { return def; }
     }
 
     public GunType gun(String id) { return id == null ? null : guns.get(id.toLowerCase()); }

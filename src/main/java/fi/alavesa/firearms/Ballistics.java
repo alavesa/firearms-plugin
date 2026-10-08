@@ -11,6 +11,9 @@ import org.bukkit.Tag;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
+import org.bukkit.block.data.BlockData;
+import java.util.HashMap;
+import java.util.Map;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.ItemDisplay;
 import org.bukkit.entity.LivingEntity;
@@ -96,7 +99,11 @@ public final class Ballistics {
         dir = dir.clone().normalize();
         Hit hit = trace(eye, dir, gun.hitscanRange(), shooter);
         Location end = hit != null ? hit.point : eye.clone().add(dir.clone().multiply(gun.hitscanRange()));
-        tracer(eye, end);
+        // The RAY starts at the eye (so it lands exactly on the crosshair); the visible tracer and the flash
+        // start at the gun's muzzle in the hand (guns.yml muzzle: right,up,forward) and converge onto the ray.
+        Location muzzle = muzzle(shooter, gun, dir);
+        tracer(muzzle, end);
+        flash(shooter, muzzle);
         if (hit != null) { resolve(hit, shooter, gun, hit.dist, dmgMult); return; }
         if (gun.range() <= gun.hitscanRange()) return;
         // Projectile phase: continue from the end of the hitscan as a slowing, dropping ray bullet.
@@ -236,6 +243,41 @@ public final class Ballistics {
         if (e instanceof Player p && (p.getGameMode() == org.bukkit.GameMode.SPECTATOR || p.getGameMode() == org.bukkit.GameMode.CREATIVE)) return false;
         if (e instanceof org.bukkit.entity.ArmorStand as && as.isMarker()) return false;
         return !le.isInvulnerable();
+    }
+
+    /** Muzzle point in the world for this shot: eye + right/up/forward offsets from the gun. */
+    public static Location muzzle(Player p, GunType gun, Vector dir) {
+        Location eye = p.getEyeLocation();
+        double[] m = gun.muzzle() == null ? new double[]{0.35, -0.22, 0.7} : gun.muzzle();
+        Vector fwd = dir.clone().normalize();
+        Vector right = fwd.clone().crossProduct(new Vector(0, 1, 0));
+        if (right.lengthSquared() < 1e-6) right = new Vector(1, 0, 0);
+        right.normalize();
+        Vector up = right.clone().crossProduct(fwd).normalize();
+        Location out = eye.clone().add(right.multiply(m[0])).add(up.multiply(m[1])).add(fwd.multiply(m[2]));
+        // never start inside a block (muzzle against a wall): pull back to the eye
+        return out.getBlock().getType().isAir() ? out : eye.clone().add(fwd.clone().multiply(0.1));
+    }
+
+    private final Map<Location, Integer> flashCells = new HashMap<>();
+
+    /** Muzzle flash: the air cell at the muzzle becomes a level-15 LIGHT block CLIENT-SIDE for every nearby
+     *  player for 2 ticks, so the shooter and bystanders see the surroundings light up (no server block). */
+    private void flash(Player shooter, Location muzzle) {
+        if (!plugin.getConfig().getBoolean("flash.light", true)) return;
+        Location cell = muzzle.getBlock().getLocation();
+        if (!cell.getBlock().getType().isAir()) return;
+        BlockData light = Material.LIGHT.createBlockData();
+        if (light instanceof org.bukkit.block.data.Levelled lv) lv.setLevel(Math.max(1, Math.min(15, plugin.getConfig().getInt("flash.level", 15))));
+        double range = plugin.getConfig().getDouble("flash.range", 32);
+        List<Player> viewers = new ArrayList<>();
+        for (Player v : muzzle.getWorld().getPlayers()) if (v.getLocation().distanceSquared(muzzle) <= range * range) { v.sendBlockChange(cell, light); viewers.add(v); }
+        int ticks = Math.max(1, plugin.getConfig().getInt("flash.ticks", 2));
+        flashCells.merge(cell, 1, Integer::sum);
+        plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+            int left = flashCells.merge(cell, -1, Integer::sum);
+            if (left <= 0) { flashCells.remove(cell); for (Player v : viewers) if (v.isOnline() && cell.isChunkLoaded()) v.sendBlockChange(cell, cell.getBlock().getBlockData()); }
+        }, ticks);
     }
 
     private void tracer(Location a, Location b) {

@@ -21,6 +21,12 @@
 #  falloff-min    damage multiplier at max range (damage falls linearly from hitscan-range to range)
 #  pellets        rounds per trigger pull (shotgun spread)
 #  sound / pitch  shot sound
+#  muzzle         "right,up,forward" in blocks from the eye: where the tracer + flash start (NOT inside the head)
+#  flash          "x,y,z" in model pixels: where the baked muzzle-flash cube sits in the fire frames (default: front end)
+#  display        optional exact first/third-person pose, same keys as Blockbench's Display tab, e.g.
+#                   display:
+#                     firstperson_righthand: { rotation: [0, -5, 0], translation: [2, 0, 1], scale: [0.6, 0.6, 0.6] }
+#                 (overrides whatever the .bbmodel contains; frames inherit it)
 guns:
   pistol:
     name: "&fPistol"
@@ -42,6 +48,7 @@ guns:
     falloff-min: 0.4
     sound: "minecraft:block.anvil.land"
     pitch: 1.8
+    muzzle: "0.35,-0.22,0.7"
   smg:
     name: "&fSMG"
     model: smg

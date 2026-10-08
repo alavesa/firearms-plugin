@@ -24,7 +24,10 @@ public record GunType(
     double falloffMin,      // damage multiplier at max range
     int pellets,
     String sound,
-    float pitch
+    float pitch,
+    double[] muzzle,        // where the tracer / flash starts: right, up, forward (blocks) from the eye
+    double[] flashAt,       // muzzle flash position in MODEL pixels for the baked fire frames, or null = auto
+    org.bukkit.configuration.ConfigurationSection display   // optional first/third-person display override (guns.yml display:)
 ) {
     public long shotIntervalMs() { return fireRate <= 0 ? 1000 : Math.round(1000.0 / fireRate); }
     public boolean usesMag() { return magId != null && !magId.isEmpty() && !magId.equalsIgnoreCase("none"); }

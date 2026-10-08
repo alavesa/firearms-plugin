@@ -80,6 +80,8 @@ public final class PackGenerator {
         model(dir, plugin.getConfig().getString("craters.model", "crater"), "crater", done);
 
         for (ArmorType v : registry.vests()) vest(dir, v, done);
+        File customFlash = new File(dir, "muzzle_flash.png");
+        files.put("assets/" + NS + "/textures/item/muzzle_flash.png", customFlash.exists() ? Files.readAllBytes(customFlash.toPath()) : flashPng());
 
         // items/<base>.json (guns, mags, ammo, crater) and items/<armour>.json (vests): model by custom_model_data string.
         itemsFile(registry.base().getKey().getKey(), cmdToModel, true);
@@ -280,6 +282,19 @@ public final class PackGenerator {
         return e;
     }
 
+    private static byte[] flashPng() throws IOException {
+        BufferedImage img = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) {
+            double d = Math.hypot(x - 7.5, y - 7.5) / 7.5;
+            int a = d > 1 ? 0 : (int) (255 * Math.pow(1 - d, 1.5));
+            int g = 200 + (int) (55 * (1 - d)), b = (int) (120 * (1 - d));
+            img.setRGB(x, y, (a << 24) | (255 << 16) | (g << 8) | b);
+        }
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ImageIO.write(img, "png", out);
+        return out.toByteArray();
+    }
+
     private static byte[] craterPng() throws IOException {
         BufferedImage img = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
         for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) {
@@ -384,7 +399,9 @@ public final class PackGenerator {
         List<Bone> top = new ArrayList<>();
         Map<String, Bone> bones = new HashMap<>();
         if (root.has("outliner")) for (JsonElement oe : root.getAsJsonArray("outliner")) parseOutliner(oe, null, top, bones, cubes);
-        Bone rootBone = top.size() == 1 && top.get(0).children.size() + top.get(0).elements.size() > 0 && cubes.values().stream().allMatch(c -> c.bone != null) ? top.get(0) : null;
+        Bone rootBone = null;
+        int best = 0;
+        for (Bone b : top) { int n = countCubes(b); if (n > best) { best = n; rootBone = b; } }
 
         // --- scale to the Java range [-16, 32]
         double[] mn = {1e9, 1e9, 1e9}, mx = {-1e9, -1e9, -1e9};
@@ -405,9 +422,20 @@ public final class PackGenerator {
 
         // --- display
         JsonObject display = root.has("display") ? displayFrom(root.getAsJsonObject("display"), 1.0 / scale) : defaultDisplay(1.0 / scale);
+        org.bukkit.configuration.ConfigurationSection ov = displayOverride(name);
+        if (ov != null) {
+            for (String key : ov.getKeys(false)) {
+                org.bukkit.configuration.ConfigurationSection t = ov.getConfigurationSection(key);
+                if (t == null) continue;
+                JsonObject cur = display.has(key) ? display.getAsJsonObject(key) : transform(new double[]{0, 0, 0}, new double[]{0, 0, 0}, new double[]{1, 1, 1});
+                double[] r = list3(t, "rotation", vec(cur.get("rotation"))), tr = list3(t, "translation", vec(cur.get("translation"))), sc = list3(t, "scale", vec(cur.get("scale")));
+                display.add(key, transform(r, tr, sc));
+            }
+        }
+        double[] flashAt = flashSpot(name, cubes);
 
         // --- rest model
-        JsonObject rest = bake(name, cubes, bones, rootBone, textures, texIndex, texRes, display, null, 0, S);
+        JsonObject rest = bake(name, cubes, bones, rootBone, textures, texIndex, texRes, display, null, 0, S, null);
         put("assets/" + NS + "/models/item/" + mpath + ".json", GSON.toJson(rest));
         cmdToModel.put(name, mpath);
 
@@ -434,7 +462,8 @@ public final class PackGenerator {
             int n = (int) Math.max(1, Math.min(60, Math.ceil(clip.length * 20.0 / frameTicks)));
             for (int i = 1; i <= n; i++) {
                 double t = n == 1 ? clip.length : (i - 1) * (clip.length / (n - 1));
-                JsonObject frame = bake(name, cubes, bones, rootBone, textures, texIndex, texRes, display, clip, t, S);
+                boolean flashFrame = key.equals("fire") && i <= Math.max(0, plugin.getConfig().getInt("flash.frames", 1));
+                JsonObject frame = bake(name, cubes, bones, rootBone, textures, texIndex, texRes, display, clip, t, S, flashFrame ? flashAt : null);
                 String fname = name + "_" + key + "_" + i;
                 put("assets/" + NS + "/models/item/" + mpath + "_" + key + "_" + i + ".json", GSON.toJson(frame));
                 cmdToModel.put(fname, mpath + "_" + key + "_" + i);
@@ -476,49 +505,105 @@ public final class PackGenerator {
         return new double[]{ v[0] * s + sh[0], v[1] * s + sh[1], v[2] * s + sh[2] };
     }
 
-    /** Build one model: rest pose (clip == null) or the clip sampled at time t. */
+    /** One baked bone: single-axis snapped rotation about its pivot + exact translation. */
+    private static final class Baked {
+        int axis = -1; double angle = 0;   // snapped rotation (Java: one axis, multiples of 22.5, |angle| <= 45)
+        double[] pivot;                    // where that rotation happens, in parent-translated space
+        double[][] noRot;                  // world transform WITHOUT any rotation (translations only)
+        double[][] full;                   // world transform with the snapped rotations applied
+    }
+
+    private static int countCubes(Bone b) {
+        int n = b.elements.size();
+        for (Bone c : b.children) n += countCubes(c);
+        return n;
+    }
+
+    private Baked bakeBone(Bone b, Map<Bone, Baked> cache, Map<Bone, double[]> rot, Map<Bone, double[]> pos, String name, Set<String> warned) {
+        Baked done = cache.get(b);
+        if (done != null) return done;
+        Baked parent = b.parent == null ? null : bakeBone(b.parent, cache, rot, pos, name, warned);
+        double[] r = rot.getOrDefault(b, new double[]{0, 0, 0}), p = pos.getOrDefault(b, new double[]{0, 0, 0});
+        Baked out = new Baked();
+        int axis = 0;
+        for (int i = 1; i < 3; i++) if (Math.abs(r[i]) > Math.abs(r[axis])) axis = i;
+        double raw = r[axis];
+        double snapped = Math.max(-45, Math.min(45, Math.round(raw / 22.5) * 22.5));
+        boolean multi = false;
+        for (int i = 0; i < 3; i++) if (i != axis && Math.abs(r[i]) > 1) multi = true;
+        if (multi && warned.add(b.name + ":multi")) warnings.add(name + ": bone '" + b.name + "' rotates on several axes - Java cubes allow one, using " + "xyz".charAt(axis));
+        if (Math.abs(raw) > 46 && warned.add(b.name + ":clamp")) warnings.add(name + ": bone '" + b.name + "' rotates " + Math.round(raw) + " deg - clamped to 45 (Java limit)");
+        double[][] parentNoRot = parent == null ? identity() : parent.noRot;
+        double[][] parentFull = parent == null ? identity() : parent.full;
+        double[][] shift = translate(p[0], p[1], p[2]);
+        out.noRot = mul(parentNoRot, shift);
+        double[] pivotLocal = {b.origin[0] + p[0], b.origin[1] + p[1], b.origin[2] + p[2]};
+        out.pivot = apply(parentNoRot, pivotLocal);
+        if (snapped != 0) {
+            out.axis = axis; out.angle = snapped;
+            double[] e = {0, 0, 0}; e[axis] = snapped;
+            out.full = mul(parentFull, mul(mul(translate(pivotLocal[0], pivotLocal[1], pivotLocal[2]), rotZYX(e)), translate(-b.origin[0], -b.origin[1], -b.origin[2])));
+        } else {
+            out.full = mul(parentFull, shift);
+        }
+        cache.put(b, out);
+        return out;
+    }
+
+    /** Build one model: rest pose (clip == null) or the clip sampled at time t. Bone rotations are snapped to
+     *  what a Java cube can do (one axis, 22.5 deg steps) and the SAME snapped rotation is applied to every cube
+     *  of the bone about the bone's pivot, so parts never drift apart; translations are exact. The root bone's
+     *  animated motion goes into the first-person display transform instead (exact, any angle). */
     private JsonObject bake(String name, Map<String, Cube> cubes, Map<String, Bone> bones, Bone rootBone, JsonObject textures,
-                            Map<String, Integer> texIndex, List<double[]> texRes, JsonObject display, Clip clip, double t, double scale) {
-        // per-bone local transform at time t
-        Map<Bone, double[][]> local = new HashMap<>();
+                            Map<String, Integer> texIndex, List<double[]> texRes, JsonObject display, Clip clip, double t, double scale, double[] flashAt) {
+        Map<Bone, double[]> rot = new HashMap<>(), pos = new HashMap<>();
         double[] rootRot = {0, 0, 0}, rootPos = {0, 0, 0};
         for (Bone b : bones.values()) {
-            double[] rot = b.rotation.clone(), pos = {0, 0, 0};
+            double[] r = b.rotation.clone(), p = {0, 0, 0};
             if (clip != null) {
                 double[] ar = sample(clip.rot.get(b.uuid), t), ap = sample(clip.pos.get(b.uuid), t);
                 if (b == rootBone) { rootRot = ar; rootPos = new double[]{ap[0] * scale, ap[1] * scale, ap[2] * scale}; }
-                else { for (int i = 0; i < 3; i++) { rot[i] += ar[i]; pos[i] += ap[i] * scale; } }
+                else for (int i = 0; i < 3; i++) { r[i] += ar[i]; p[i] += ap[i] * scale; }
             }
-            local.put(b, mul(mul(translate(b.origin[0] + pos[0], b.origin[1] + pos[1], b.origin[2] + pos[2]), rotZYX(rot)), translate(-b.origin[0], -b.origin[1], -b.origin[2])));
+            rot.put(b, r); pos.put(b, p);
         }
-        Map<Bone, double[][]> world = new HashMap<>();
+        Map<Bone, Baked> baked = new HashMap<>();
+        Set<String> warned = new LinkedHashSet<>();
         JsonArray elements = new JsonArray();
         for (Cube c : cubes.values()) {
-            double[][] M = c.bone == null ? identity() : worldOf(c.bone, local, world);
-            double[] center = {(c.from[0] + c.to[0]) / 2, (c.from[1] + c.to[1]) / 2, (c.from[2] + c.to[2]) / 2};
-            double[] nc = apply(M, center);
-            double[] size = {c.to[0] - c.from[0], c.to[1] - c.from[1], c.to[2] - c.from[2]};
-            double[] from = {nc[0] - size[0] / 2, nc[1] - size[1] / 2, nc[2] - size[2] / 2};
-            double[] to = {nc[0] + size[0] / 2, nc[1] + size[1] / 2, nc[2] + size[2] / 2};
-            double[] eul = euler(M);
-            double[] total = {eul[0] + c.rotation[0], eul[1] + c.rotation[1], eul[2] + c.rotation[2]};
-            int axis = 0;
-            for (int i = 1; i < 3; i++) if (Math.abs(total[i]) > Math.abs(total[axis])) axis = i;
-            double snapped = Math.max(-45, Math.min(45, Math.round(total[axis] / 22.5) * 22.5));
+            Baked bb = c.bone == null ? null : bakeBone(c.bone, baked, rot, pos, name, warned);
+            // The ONE rotation a Java cube gets: the nearest rotated bone up the chain (angles on the same axis
+            // further up are folded in), else the cube's own rest rotation.
+            int axis = -1; double angle = 0; double[] pivot = null;
+            double[][] place = bb == null ? identity() : bb.noRot;   // translations only; the rotation is re-applied by the element
+            for (Bone w = c.bone; w != null; w = w.parent) {
+                Baked wb = baked.get(w);
+                if (wb == null || wb.axis < 0) continue;
+                if (axis < 0) { axis = wb.axis; angle = wb.angle; pivot = wb.pivot; }
+                else if (wb.axis == axis) angle = Math.max(-45, Math.min(45, angle + wb.angle));
+                else if (warned.add(c.uuid + ":nest")) warnings.add(name + ": nested bones rotate on different axes around '" + w.name + "' - approximated");
+            }
+            if (c.rotation[0] != 0 || c.rotation[1] != 0 || c.rotation[2] != 0) {
+                int ca = 0;
+                for (int i = 1; i < 3; i++) if (Math.abs(c.rotation[i]) > Math.abs(c.rotation[ca])) ca = i;
+                double cs = Math.max(-45, Math.min(45, Math.round(c.rotation[ca] / 22.5) * 22.5));
+                if (axis < 0) { axis = ca; angle = cs; pivot = apply(place, c.origin); }
+                else if (ca == axis) angle = Math.max(-45, Math.min(45, angle + cs));
+            }
+            double[] from = apply(place, c.from), to = apply(place, c.to);
+            for (int i = 0; i < 3; i++) if (from[i] > to[i]) { double x = from[i]; from[i] = to[i]; to[i] = x; }
             JsonObject rotation = null;
-            if (snapped != 0) {
+            if (axis >= 0 && angle != 0) {
                 rotation = new JsonObject();
-                double[] origin = c.bone == null ? c.origin : apply(M, c.origin);
-                // element rotates about its own origin at rest; under a bone, about the bone-moved origin
-                rotation.add("origin", arr(origin));
+                rotation.add("origin", arr(pivot));
                 rotation.addProperty("axis", axis == 0 ? "x" : axis == 1 ? "y" : "z");
-                rotation.addProperty("angle", snapped);
+                rotation.addProperty("angle", angle);
             }
             boolean inRange = true;
             for (int i = 0; i < 3; i++) if (from[i] < -16 || from[i] > 32 || to[i] < -16 || to[i] > 32) inRange = false;
             if (!inRange) {   // one bad cube would make the client reject the whole model: clamp it instead
                 for (int i = 0; i < 3; i++) { from[i] = Math.max(-16, Math.min(32, from[i])); to[i] = Math.max(-16, Math.min(32, to[i])); }
-                if (clip == null) warnings.add(name + ": a cube moved outside the Java model range and was clamped");
+                if (clip == null) warnings.add(name + ": a cube lies outside the Java model range and was clamped");
             }
             JsonObject e = new JsonObject();
             e.add("from", arr(from));
@@ -543,21 +628,57 @@ public final class PackGenerator {
             e.add("faces", faces);
             elements.add(e);
         }
+        JsonObject tex = textures;
+        if (flashAt != null) {
+            tex = textures.deepCopy();
+            tex.addProperty("flash", NS + ":item/muzzle_flash");
+            double sz = plugin.getConfig().getDouble("flash.size", 3.0) / 2;
+            JsonObject f = cube(new double[]{flashAt[0] - sz, flashAt[1] - sz, flashAt[2] - sz * 1.6}, new double[]{flashAt[0] + sz, flashAt[1] + sz, flashAt[2] + sz * 1.6}, "#flash", new double[]{0, 0, 16, 16}, null);
+            f.addProperty("shade", false);
+            elements.add(f);
+        }
         JsonObject model = new JsonObject();
-        model.add("textures", textures);
+        model.add("textures", tex);
         model.add("elements", elements);
         JsonObject disp = display.deepCopy();
         if (clip != null && rootBone != null) {
+            double[] rs = sign("anim.root-rotation-sign"), ps = sign("anim.root-position-sign");
             for (String hand : new String[]{"firstperson_righthand", "firstperson_lefthand"}) {
                 JsonObject h = disp.has(hand) ? disp.getAsJsonObject(hand) : transform(new double[]{0, 0, 0}, new double[]{0, 0, 0}, new double[]{1, 1, 1});
-                double[] r = vec(h.get("rotation")), tr = vec(h.get("translation")), sc = vec(h.get("scale"));
-                h.add("rotation", arr(r[0] + rootRot[0], r[1] + rootRot[1], r[2] + rootRot[2]));
-                h.add("translation", arr(clamp80(tr[0] + rootPos[0] * sc[0]), clamp80(tr[1] + rootPos[1] * sc[1]), clamp80(tr[2] + rootPos[2] * sc[2])));
+                double[] r = vec(h.get("rotation")), tr = vec(h.get("translation"));
+                double mirror = hand.endsWith("lefthand") ? -1 : 1;
+                h.add("rotation", arr(r[0] + rootRot[0] * rs[0], r[1] + rootRot[1] * rs[1] * mirror, r[2] + rootRot[2] * rs[2] * mirror));
+                h.add("translation", arr(clamp80(tr[0] + rootPos[0] * ps[0] * mirror), clamp80(tr[1] + rootPos[1] * ps[1]), clamp80(tr[2] + rootPos[2] * ps[2])));
                 disp.add(hand, h);
             }
         }
         model.add("display", disp);
         return model;
+    }
+
+    private double[] sign(String key) {
+        List<Double> l = plugin.getConfig().getDoubleList(key);
+        return l.size() == 3 ? new double[]{l.get(0), l.get(1), l.get(2)} : new double[]{1, 1, 1};
+    }
+
+    private org.bukkit.configuration.ConfigurationSection displayOverride(String model) {
+        for (GunType g : registry.guns()) if (g.model().equals(model) && g.display() != null) return g.display();
+        return null;
+    }
+
+    private static double[] list3(org.bukkit.configuration.ConfigurationSection s, String key, double[] def) {
+        List<Double> l = s.getDoubleList(key);
+        return l.size() == 3 ? new double[]{l.get(0), l.get(1), l.get(2)} : def;
+    }
+
+    /** Flash position in model px: guns.yml `flash: x,y,z`, else the centre of the model's front (north, -Z) face. */
+    private double[] flashSpot(String model, Map<String, Cube> cubes) {
+        for (GunType g : registry.guns()) if (g.model().equals(model) && g.flashAt() != null) return g.flashAt();
+        if (cubes.isEmpty()) return new double[]{8, 8, -2};
+        double minZ = 1e9, sx = 0, sy = 0; int n = 0;
+        for (Cube c : cubes.values()) minZ = Math.min(minZ, Math.min(c.from[2], c.to[2]));
+        for (Cube c : cubes.values()) if (Math.min(c.from[2], c.to[2]) <= minZ + 0.5) { sx += (c.from[0] + c.to[0]) / 2; sy += (c.from[1] + c.to[1]) / 2; n++; }
+        return new double[]{ n == 0 ? 8 : sx / n, n == 0 ? 8 : sy / n, minZ - 1.5 };
     }
 
     private static double clamp80(double v) { return Math.max(-80, Math.min(80, v)); }
