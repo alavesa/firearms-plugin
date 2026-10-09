@@ -1,7 +1,7 @@
 # Guns. Every gun is ONE fixed fire mode: semi or auto.
 #  model          custom_model_data string = the .bbmodel file name in plugins/Firearms/models (without .bbmodel)
 #  weight         kg - walk-speed penalty while held (config weight.speed-per-kg)
-#  fire-mode      semi | auto
+#  fire-mode      semi | auto | "semi,auto" (right-click switches; the first one listed is the default)
 #  fire-rate      rounds per second (auto: spray cadence; semi: the fastest you may click)
 #  damage         damage dealt to whoever is shot, in HALF-hearts (4.0 = 2 hearts), at full strength (within
 #                 hitscan-range); falls off to falloff-min at range; -10%/wall layer (config penetration-damage);
@@ -13,7 +13,10 @@
 #  reload-seconds magazine swap time (mag guns) / seconds PER ROUND (pump-action)
 #  hitscan-range  blocks the shot is instant (full damage). Past it the bullet becomes a slowing projectile.
 #  range          max distance the projectile can still travel/hit
-#  speed          projectile speed in blocks/tick right after the hitscan range (then drag + gravity apply)
+#  speed          projectile speed in blocks/tick right after the hitscan range (then drag applies)
+#  drop-start     blocks the bullet flies DEAD STRAIGHT (default 3 x hitscan-range); after that it arches down
+#  drop           severity of the arch: downward velocity gained per tick once arching (default config projectile-gravity)
+#  INSPECT        an animation named "inspect" in the .bbmodel plays on F when the gun is full or you have nothing to load
 #  accuracy       hip-fire spread in degrees (0 = laser)
 #  aim-accuracy   spread while sneaking
 #  recoil         vertical camera kick per shot in degrees
@@ -82,7 +85,7 @@ guns:
     name: "&fRifle"
     model: rifle
     weight: 3.6
-    fire-mode: auto
+    fire-mode: "semi,auto"   # right-click switches
     fire-rate: 9
     damage: 5.0
     magazine: 30

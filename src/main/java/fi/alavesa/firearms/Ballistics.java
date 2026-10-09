@@ -131,7 +131,8 @@ public final class Ballistics {
             b.pos = next;
             b.traveled += step;
             b.vel.multiply(1.0 - drag);
-            b.vel.setY(b.vel.getY() - gravity);
+            // dead straight until drop-start, then the arch (per gun `drop` = severity)
+            if (b.gun.hitscanRange() + b.traveled > b.gun.dropStart()) b.vel.setY(b.vel.getY() - (b.gun.drop() > 0 ? b.gun.drop() : gravity));
             if (b.gun.hitscanRange() + b.traveled >= b.gun.range()) it.remove();
         }
     }

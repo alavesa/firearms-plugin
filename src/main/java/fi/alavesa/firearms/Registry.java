@@ -100,7 +100,8 @@ public final class Registry {
                 s.getString("name", id),
                 s.getString("model", key),
                 s.getDouble("weight", 1.0),
-                s.getString("fire-mode", "semi").trim().equalsIgnoreCase("auto"),
+                s.getString("fire-mode", "semi").trim().toLowerCase().startsWith("auto"),
+                s.getString("fire-mode", "semi").toLowerCase().contains("semi") && s.getString("fire-mode", "semi").toLowerCase().contains("auto"),
                 s.getDouble("fire-rate", 5.0),
                 s.getDouble("damage", 4.0),
                 Math.max(1, s.getInt("magazine", 10)),
@@ -125,6 +126,8 @@ public final class Registry {
                 s.getString("casing", "casing").toLowerCase(),
                 triple(s.getString("eject", "0.25,-0.15,0.4"), new double[]{0.25, -0.15, 0.4}),
                 s.getConfigurationSection("arms"),
+                s.getDouble("drop-start", s.getDouble("hitscan-range", 10.0) * 3),
+                s.getDouble("drop", plugin.getConfig().getDouble("ballistics.projectile-gravity", 0.03)),
                 s.getDouble("equip-seconds", 0)));
         }
         // Animation frame index written by the pack generator.
@@ -228,6 +231,22 @@ public final class Registry {
         return m.getOrDefault(clip, List.of());
     }
 
+    /** Is this gun item in AUTO mode right now (per-item for switchable guns, else the gun's default)? */
+    public boolean isAuto(ItemStack it, GunType gun) {
+        if (!gun.switchable() || it == null || !it.hasItemMeta()) return gun.auto();
+        String m = it.getItemMeta().getPersistentDataContainer().get(new NamespacedKey(plugin, "mode"), PersistentDataType.STRING);
+        return m == null ? gun.auto() : m.equals("auto");
+    }
+
+    /** Flip a switchable gun between semi and auto. Returns the new mode name. */
+    public String toggleMode(ItemStack it, GunType gun) {
+        boolean auto = !isAuto(it, gun);
+        ItemMeta meta = it.getItemMeta();
+        meta.getPersistentDataContainer().set(new NamespacedKey(plugin, "mode"), PersistentDataType.STRING, auto ? "auto" : "semi");
+        it.setItemMeta(meta);
+        return auto ? "AUTO" : "SEMI";
+    }
+
     /** The casing model a gun ejects: models/<gunmodel>_casing.bbmodel if that file exists, else guns.yml casing:
      *  (default "casing"), or null for "none". */
     public String casingModel(GunType g) {
@@ -289,7 +308,7 @@ public final class Registry {
         ItemMeta meta = item.getItemMeta();
         meta.displayName(name(gun.name()));
         meta.lore(List.of(
-            Component.text(gun.auto() ? "AUTO - hold left-click" : "SEMI - one shot per click", NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false),
+            Component.text(gun.switchable() ? "SEMI / AUTO - right-click to switch" : gun.auto() ? "AUTO - hold left-click" : "SEMI - one shot per click", NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false),
             Component.text(gun.usesMag() ? "Magazine: " + gun.magId() : "Loads " + gun.ammoId() + " one by one", NamedTextColor.DARK_GRAY).decoration(TextDecoration.ITALIC, false),
             Component.text("F = reload", NamedTextColor.DARK_GRAY).decoration(TextDecoration.ITALIC, false)));
         setModel(meta, gun.model());

@@ -52,7 +52,8 @@ public final class FireController implements Listener {
     private final Set<UUID> reloadingPump = ConcurrentHashMap.newKeySet();
     private final Map<UUID, List<BukkitTask>> animTasks = new ConcurrentHashMap<>();
     private final Map<UUID, Long> lastShotTick = new ConcurrentHashMap<>();
-    private final Map<UUID, Integer> drawUntil = new ConcurrentHashMap<>();   // server tick until which the gun is still being drawn
+    private final Map<UUID, Integer> drawUntil = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> modeToggleAt = new ConcurrentHashMap<>();   // server tick until which the gun is still being drawn
 
     public FireController(FirearmsPlugin plugin, Registry registry, Ballistics ballistics, Casings casings) {
         this.plugin = plugin;
@@ -92,7 +93,16 @@ public final class FireController implements Listener {
                 if (event.getClickedBlock() == null || !event.getClickedBlock().getType().isAir()) event.setCancelled(true);
                 trigger(p, gun, item);
             } else if (right) {
-                event.setCancelled(true);   // right-click does nothing with a gun
+                event.setCancelled(true);
+                if (gun.switchable()) {
+                    long now = System.currentTimeMillis();
+                    Long lastT = modeToggleAt.put(p.getUniqueId(), now);
+                    if (lastT == null || now - lastT > 300) {   // one toggle per click (right-click fires twice: air + block)
+                        String mode = registry.toggleMode(item, gun);
+                        p.sendActionBar(Component.text("Fire mode: " + mode, NamedTextColor.YELLOW));
+                        p.playSound(p.getLocation(), "minecraft:block.lever.click", 0.7f, mode.equals("AUTO") ? 1.6f : 1.2f);
+                    }
+                }
             }
             return;
         }
@@ -110,7 +120,7 @@ public final class FireController implements Listener {
         if (reloadingMag.contains(id)) return;                       // a magazine swap cannot be interrupted
         Integer du = drawUntil.get(id);
         if (du != null && plugin.getServer().getCurrentTick() < du) return;   // still drawing the gun: no shooting
-        if (!gun.auto() && last != null && now - last < 150) return; // semi: ignore the per-tick hold stream
+        if (!registry.isAuto(item, gun) && last != null && now - last < 150) return; // semi: ignore the per-tick hold stream
         Long next = nextShotAt.get(id);
         if (next != null && now < next) return;                      // fire-rate
         if (reloadingPump.contains(id)) cancelReload(p);             // pump reload: shooting interrupts it
@@ -184,8 +194,9 @@ public final class FireController implements Listener {
         GunType gun = registry.gunOf(item);
         if (gun == null) return;
         event.setCancelled(true);
-        if (gun.pumpAction() || !gun.usesMag()) startPumpReload(p, gun, item);
-        else startMagReload(p, gun, item);
+        boolean started = gun.pumpAction() || !gun.usesMag() ? startPumpReload(p, gun, item) : startMagReload(p, gun, item);
+        // Second use of the reload key: full gun or nothing to load -> the "inspect" animation.
+        if (!started && !reloadingMag.contains(p.getUniqueId()) && !reloadingPump.contains(p.getUniqueId())) playClip(p, gun, item, "inspect");
     }
 
     private List<String> magIds(GunType gun) {
@@ -194,9 +205,9 @@ public final class FireController implements Listener {
         return out;
     }
 
-    private void startMagReload(Player p, GunType gun, ItemStack item) {
+    private boolean startMagReload(Player p, GunType gun, ItemStack item) {
         UUID id = p.getUniqueId();
-        if (reloadingMag.contains(id) || reloadingPump.contains(id)) return;
+        if (reloadingMag.contains(id) || reloadingPump.contains(id)) return false;
         PlayerInventory inv = p.getInventory();
         List<String> accepted = magIds(gun);
         int bestSlot = -1, bestRounds = -1;
@@ -209,8 +220,8 @@ public final class FireController implements Listener {
         }
         int current = registry.rounds(item);
         if (bestSlot == -1 || bestRounds <= 0 || bestRounds <= current) {
-            p.sendActionBar(Component.text(bestSlot == -1 ? "No " + String.join("/", accepted) + " magazine" : "No fuller magazine", NamedTextColor.RED));
-            return;
+            p.sendActionBar(Component.text(bestSlot == -1 ? "No " + String.join("/", accepted) + " magazine" : current >= capacity(item, gun) ? "Magazine full" : "No fuller magazine", NamedTextColor.GRAY));
+            return false;
         }
         final int slot = bestSlot;
         final String uid = uid(item);
@@ -246,16 +257,17 @@ public final class FireController implements Listener {
             p.getWorld().playSound(p.getLocation(), "minecraft:item.crossbow.loading_end", 1f, 1.3f);
             p.sendActionBar(Component.text(newRounds + " / " + newMag.capacity(), NamedTextColor.GREEN));
         }, ticks));
+        return true;
     }
 
     /** Pump-action / tube guns: one round at a time; shooting interrupts and keeps what was loaded. */
-    private void startPumpReload(Player p, GunType gun, ItemStack item) {
+    private boolean startPumpReload(Player p, GunType gun, ItemStack item) {
         UUID id = p.getUniqueId();
-        if (reloadingMag.contains(id) || reloadingPump.contains(id)) return;
+        if (reloadingMag.contains(id) || reloadingPump.contains(id)) return false;
         AmmoType ammo = registry.ammo(gun.ammoId());
-        if (ammo == null) { p.sendActionBar(Component.text("This gun has no ammo type configured", NamedTextColor.RED)); return; }
-        if (registry.rounds(item) >= gun.magazine()) return;
-        if (takeAmmo(p, ammo, 0) <= 0) { p.sendActionBar(Component.text("No " + plain(ammo.name()), NamedTextColor.RED)); return; }
+        if (ammo == null) { p.sendActionBar(Component.text("This gun has no ammo type configured", NamedTextColor.RED)); return false; }
+        if (registry.rounds(item) >= gun.magazine()) return false;
+        if (takeAmmo(p, ammo, 0) <= 0) { p.sendActionBar(Component.text("No " + plain(ammo.name()), NamedTextColor.GRAY)); return false; }
         final String uid = uid(item);
         reloadingPump.add(id);
         long per = Math.max(2, Math.round(gun.reloadSeconds() * 20));
@@ -271,6 +283,7 @@ public final class FireController implements Listener {
             p.sendActionBar(Component.text((r + 1) + " / " + gun.magazine(), NamedTextColor.YELLOW));
             if (r + 1 >= gun.magazine()) cancelReload(p);
         }, per, per));
+        return true;
     }
 
     /** Count (take == 0) or remove `take` loose rounds of this type from the inventory. Returns the count available before taking. */
@@ -329,6 +342,37 @@ public final class FireController implements Listener {
         return it.getItemMeta().getPersistentDataContainer().getOrDefault(registry.uidKey, PersistentDataType.STRING, "");
     }
 
+    // ------------------------------------------------------------------ off-hand lock
+
+    /** Guns never go into the off-hand, and nothing goes there while a gun is in the main hand. */
+    @EventHandler(ignoreCancelled = true)
+    public void onInvClick(org.bukkit.event.inventory.InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player p)) return;
+        boolean offhandSlot = event.getClickedInventory() == p.getInventory() && event.getSlot() == 40;
+        boolean holdingGun = registry.gunOf(p.getInventory().getItemInMainHand()) != null;
+        boolean movingGun = registry.gunOf(event.getCursor()) != null || registry.gunOf(event.getCurrentItem()) != null
+            || (event.getHotbarButton() >= 0 && registry.gunOf(p.getInventory().getItem(event.getHotbarButton())) != null);
+        if (event.getClick() == org.bukkit.event.inventory.ClickType.SWAP_OFFHAND && (movingGun || holdingGun || registry.gunOf(p.getInventory().getItemInOffHand()) != null)) { event.setCancelled(true); return; }
+        if (offhandSlot && (movingGun || holdingGun)) { event.setCancelled(true); p.sendActionBar(Component.text("Guns are two-handed.", NamedTextColor.GRAY)); }
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onInvDrag(org.bukkit.event.inventory.InventoryDragEvent event) {
+        if (!(event.getWhoClicked() instanceof Player p)) return;
+        if (!event.getRawSlots().contains(45)) return;   // 45 = off-hand in the player's own inventory view
+        if (registry.gunOf(event.getOldCursor()) != null || registry.gunOf(p.getInventory().getItemInMainHand()) != null) event.setCancelled(true);
+    }
+
+    /** Equipping a gun: whatever sits in the off-hand is moved back into the inventory. */
+    private void clearOffhand(Player p) {
+        ItemStack off = p.getInventory().getItemInOffHand();
+        if (off == null || off.getType().isAir()) return;
+        p.getInventory().setItemInOffHand(null);
+        var left = p.getInventory().addItem(off);
+        left.values().forEach(l -> p.getWorld().dropItemNaturally(p.getLocation(), l));
+        p.sendActionBar(Component.text("Guns are two-handed - off-hand item put away.", NamedTextColor.GRAY));
+    }
+
     // ------------------------------------------------------------------ guns never punch / break
 
     @EventHandler(ignoreCancelled = true)
@@ -356,6 +400,7 @@ public final class FireController implements Listener {
         plugin.getServer().getScheduler().runTask(plugin, () -> {
             ItemStack held = p.getInventory().getItem(event.getNewSlot());
             if (registry.gunOf(held) == gun) {
+                clearOffhand(p);
                 refreshArms(p);
                 p.playSound(p.getLocation(), "minecraft:item.armor.equip_chain", 0.5f, 1.5f);
                 int[] a = registry.anim(gun.model(), "equip");
@@ -440,5 +485,5 @@ public final class FireController implements Listener {
         for (Player p : plugin.getServer().getOnlinePlayers()) { cancelReload(p); cancelClip(p); }
     }
 
-    static List<String> clips() { return Arrays.asList("fire", "reload", "equip", "pump"); }
+    static List<String> clips() { return Arrays.asList("fire", "reload", "equip", "pump", "inspect"); }
 }

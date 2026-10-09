@@ -61,6 +61,7 @@ public final class PackGenerator {
     private final Map<String, String> vestCmdToModel = new LinkedHashMap<>();   // vests live on the armour item
     private final Map<String, String> fpVariant = new LinkedHashMap<>();        // cmd string -> first-person model path (gun + arms)
     private final Map<String, Integer> fpTints = new LinkedHashMap<>();         // cmd string -> number of arm tint indices
+    private final Map<String, String> iconOf = new LinkedHashMap<>();           // cmd string -> flat GUI icon model path
     private final Map<String, List<String>> soundEvents = new LinkedHashMap<>();// sound event -> files
     private GunType currentGun;
     private final List<String> report = new ArrayList<>();
@@ -96,6 +97,8 @@ public final class PackGenerator {
         for (String c : casingModels) model(dir, c, "casing", done);
         currentName = null;   // everything below is shared (items file, textures, sounds) - not one model's size
         files.put("assets/" + NS + "/textures/item/arm_pixel.png", whitePng());
+        // Flat GUI icons (Roblox-style label cards) for every gun: models/<model>_icon.png if you drew one, else generated.
+        if (plugin.getConfig().getBoolean("icons.enabled", true)) for (GunType g : registry.guns()) icon(dir, g);
         if (!soundEvents.isEmpty()) {
             JsonObject sj = new JsonObject();
             for (var e : soundEvents.entrySet()) {
@@ -191,7 +194,29 @@ public final class PackGenerator {
             m.addProperty("type", "minecraft:model");
             m.addProperty("model", NS + ":item/" + e.getValue());
             String fp = fpVariant.get(e.getKey());
-            if (fp != null && files.containsKey("assets/" + NS + "/models/item/" + fp + ".json")) {
+            String icon = iconOf.get(e.getKey());
+            if (icon != null && !files.containsKey("assets/" + NS + "/models/item/" + icon + ".json")) icon = null;
+            if (fp != null && !files.containsKey("assets/" + NS + "/models/item/" + fp + ".json")) fp = null;
+            if (fp == null && icon != null) {
+                JsonObject sel = new JsonObject();
+                sel.addProperty("type", "minecraft:select");
+                sel.addProperty("property", "minecraft:display_context");
+                JsonArray sc = new JsonArray();
+                JsonObject gc = new JsonObject();
+                gc.addProperty("when", "gui");
+                JsonObject im = new JsonObject();
+                im.addProperty("type", "minecraft:model");
+                im.addProperty("model", NS + ":item/" + icon);
+                gc.add("model", im);
+                sc.add(gc);
+                sel.add("cases", sc);
+                sel.add("fallback", m);
+                c.add("model", sel);
+                report.add(base + ": \"" + e.getKey() + "\" -> " + NS + ":item/" + e.getValue() + "  (gui icon: " + icon + ")");
+                cases.add(c);
+                continue;
+            }
+            if (fp != null) {
                 // first person -> gun + skin-tinted arms (tint k = custom_model_data.colors[k]); elsewhere the plain gun
                 JsonObject armsM = new JsonObject();
                 armsM.addProperty("type", "minecraft:model");
@@ -223,10 +248,19 @@ public final class PackGenerator {
                 fpCase.add("when", when);
                 fpCase.add("model", fpm);
                 sc.add(fpCase);
+                if (icon != null) {
+                    JsonObject gc = new JsonObject();
+                    gc.addProperty("when", "gui");
+                    JsonObject im = new JsonObject();
+                    im.addProperty("type", "minecraft:model");
+                    im.addProperty("model", NS + ":item/" + icon);
+                    gc.add("model", im);
+                    sc.add(gc);
+                }
                 sel.add("cases", sc);
                 sel.add("fallback", m);
                 c.add("model", sel);
-                report.add(base + ": \"" + e.getKey() + "\" -> " + NS + ":item/" + e.getValue() + "  (first person: " + fp + ", " + n + " skin tints)");
+                report.add(base + ": \"" + e.getKey() + "\" -> " + NS + ":item/" + e.getValue() + "  (first person: " + fp + ", " + n + " skin tints" + (icon != null ? ", gui icon: " + icon : "") + ")");
             } else {
                 c.add("model", m);
                 report.add(base + ": \"" + e.getKey() + "\" -> " + NS + ":item/" + e.getValue());
@@ -447,6 +481,63 @@ public final class PackGenerator {
             tint++;
         }
         return tint;
+    }
+
+    private void icon(File dir, GunType g) throws IOException {
+        String mp = path(g.model());
+        File custom = new File(dir, g.model() + "_icon.png");
+        byte[] png = custom.exists() ? Files.readAllBytes(custom.toPath()) : labelPng(g);
+        files.put("assets/" + NS + "/textures/item/icons/" + mp + ".png", png);
+        JsonObject model = new JsonObject();
+        model.addProperty("parent", "minecraft:item/generated");
+        JsonObject tex = new JsonObject();
+        tex.addProperty("layer0", NS + ":item/icons/" + mp);
+        model.add("textures", tex);
+        put("assets/" + NS + "/models/item/" + mp + "_icon.json", GSON.toJson(model));
+        for (String cmd : new ArrayList<>(cmdToModel.keySet()))
+            if (cmd.equals(g.model()) || cmd.startsWith(g.model() + "_")) iconOf.put(cmd, mp + "_icon");
+    }
+
+    /** A 64x64 label card: dark rounded background, the gun's name in big letters (fitted), a thin accent bar. */
+    private byte[] labelPng(GunType g) throws IOException {
+        String text = g.name().replaceAll("&[0-9a-fk-or]", "").trim().toUpperCase(Locale.ROOT);
+        if (text.isEmpty()) text = g.id().toUpperCase(Locale.ROOT);
+        int size = 64;
+        BufferedImage img = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics2D gfx = img.createGraphics();
+        gfx.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+        gfx.setRenderingHint(java.awt.RenderingHints.KEY_TEXT_ANTIALIASING, java.awt.RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        gfx.setColor(new java.awt.Color(28, 30, 36, 235));
+        gfx.fillRoundRect(2, 2, size - 4, size - 4, 12, 12);
+        gfx.setColor(new java.awt.Color(90, 96, 110, 255));
+        gfx.setStroke(new java.awt.BasicStroke(2f));
+        gfx.drawRoundRect(2, 2, size - 4, size - 4, 12, 12);
+        int accent = 0xE8A33D;
+        try { accent = Integer.parseInt(plugin.getConfig().getString("icons.accent", "E8A33D").replace("#", ""), 16); } catch (NumberFormatException ignored) { }
+        gfx.setColor(new java.awt.Color(accent));
+        gfx.fillRoundRect(10, size - 14, size - 20, 4, 3, 3);
+        // split long names onto two lines, fit the font
+        String[] lines = text.length() > 9 && text.contains(" ") ? text.split(" ", 2) : new String[]{text};
+        gfx.setColor(java.awt.Color.WHITE);
+        float fs = lines.length == 1 ? 22f : 16f;
+        java.awt.Font font = new java.awt.Font(java.awt.Font.SANS_SERIF, java.awt.Font.BOLD, (int) fs);
+        for (int i = 0; i < 12; i++) {
+            font = font.deriveFont(fs);
+            java.awt.FontMetrics fm = gfx.getFontMetrics(font);
+            int w = 0; for (String l : lines) w = Math.max(w, fm.stringWidth(l));
+            if (w <= size - 12) break;
+            fs -= 1.5f;
+        }
+        gfx.setFont(font);
+        java.awt.FontMetrics fm = gfx.getFontMetrics();
+        int lineH = fm.getAscent() + 1;
+        int totalH = lineH * lines.length;
+        int y = (size - 10) / 2 - totalH / 2 + fm.getAscent() - 1;
+        for (String l : lines) { gfx.drawString(l, (size - fm.stringWidth(l)) / 2, y); y += lineH; }
+        gfx.dispose();
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ImageIO.write(img, "png", out);
+        return out.toByteArray();
     }
 
     private static byte[] whitePng() throws IOException {

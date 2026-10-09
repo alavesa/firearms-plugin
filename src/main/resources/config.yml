@@ -27,7 +27,7 @@ ballistics:
   tracer: true           # dust tracer along each shot
   tracer-step: 1.5       # blocks between tracer particles
   projectile-drag: 0.06  # per-tick speed loss after the hitscan range (projectile phase)
-  projectile-gravity: 0.03  # per-tick downward velocity gain after the hitscan range
+  projectile-gravity: 0.03  # default `drop` (per-tick downward velocity gain once a bullet starts arching)
   penetration-damage: 0.9   # damage multiplier per penetrable wall layer the bullet went through (0.9 = 10% less)
   # Blocks a bullet flies THROUGH if there is only ONE layer of them (a second layer in a row stops it).
   # "#name" = a vanilla block tag, otherwise a block id.
@@ -76,6 +76,13 @@ arms:
   enabled: false         # OFF by default: model the hands in the .bbmodel itself; turn on for skin-coloured arms
   right: { enabled: true,  pos: [10.5, 1, 11.5], rotation: [-45, 0, 0] }
   left:  { enabled: false, pos: [5.5, 3, 4],      rotation: [-45, 0, 22.5] }
+
+# ---- GUI icons ----
+# In the inventory a gun shows a flat label card ("RIFLE", "SMG"...) instead of the 3D model - Roblox style. Draw your
+# own as models/<model>_icon.png (any size) or let the generator render the gun's name. accent = the bar colour.
+icons:
+  enabled: true
+  accent: "E8A33D"
 
 # ---- Craters (bullet holes) ----
 craters:

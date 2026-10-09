@@ -6,7 +6,8 @@ public record GunType(
     String name,
     String model,
     double weight,          // kg -> walk-speed penalty while held
-    boolean auto,           // fire-mode: auto (hold to spray) or semi (one per click)
+    boolean auto,           // default fire mode: auto (hold to spray) or semi (one per click)
+    boolean switchable,     // fire-mode: "semi,auto" -> right-click toggles the mode per gun item
     double fireRate,        // rounds per second
     double damage,          // at full strength (inside hitscan range), per pellet
     int magazine,           // rounds the gun holds
@@ -31,6 +32,8 @@ public record GunType(
     String casing,          // casing model (custom_model_data string), "" = no casings
     double[] eject,         // ejection port: right, up, forward (blocks) from the eye
     org.bukkit.configuration.ConfigurationSection arms,     // per-gun first-person arms override (guns.yml arms:)
+    double dropStart,       // blocks the bullet flies dead straight before gravity starts to arch it
+    double drop,            // per-tick downward velocity gain once arching (severity of the arch)
     double equipSeconds     // draw time: the equip clip is stretched/compressed to this and the gun can't fire meanwhile (0 = clip length / 0.5 s)
 ) {
     public long shotIntervalMs() { return fireRate <= 0 ? 1000 : Math.round(1000.0 / fireRate); }
