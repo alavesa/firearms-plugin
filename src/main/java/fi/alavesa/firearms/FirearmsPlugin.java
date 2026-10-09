@@ -21,6 +21,7 @@ public final class FirearmsPlugin extends JavaPlugin {
     private HoldDetector hold;
     private FireController controller;
     private Casings casings;
+    private Grenades grenades;
     private String duplicateJars;
     private volatile boolean packRunning = false;
 
@@ -42,6 +43,9 @@ public final class FirearmsPlugin extends JavaPlugin {
         controller = new FireController(this, registry, ballistics, casings);
         getServer().getPluginManager().registerEvents(controller, this);
         getServer().getScheduler().runTaskTimer(this, casings::tick, 1L, 1L);
+        grenades = new Grenades(this, registry);
+        getServer().getPluginManager().registerEvents(grenades, this);
+        getServer().getScheduler().runTaskTimer(this, grenades::tick, 1L, 1L);
         getServer().getScheduler().runTaskTimer(this, hold::tick, 1L, 1L);
         getServer().getScheduler().runTaskTimer(this, hold::poll, 20L, 5L);
         getServer().getScheduler().runTaskTimer(this, ballistics::tick, 1L, 1L);
@@ -87,6 +91,7 @@ public final class FirearmsPlugin extends JavaPlugin {
         if (hold != null) hold.clearAll();
         if (ballistics != null) ballistics.clearAll();
         if (casings != null) casings.clearAll();
+        if (grenades != null) grenades.clearAll();
     }
 
     @Override
@@ -98,6 +103,7 @@ public final class FirearmsPlugin extends JavaPlugin {
                 sender.sendMessage(Component.text("Mags: " + String.join(", ", registry.magIds()), NamedTextColor.YELLOW));
                 sender.sendMessage(Component.text("Ammo: " + String.join(", ", registry.ammoIds()), NamedTextColor.GRAY));
                 sender.sendMessage(Component.text("Vests: " + String.join(", ", registry.vestIds()), NamedTextColor.AQUA));
+                sender.sendMessage(Component.text("Grenades: " + String.join(", ", registry.grenadeIds()), NamedTextColor.RED));
                 return true;
             }
             case "give" -> {
@@ -113,7 +119,9 @@ public final class FirearmsPlugin extends JavaPlugin {
                 MagType m = registry.mag(id);
                 AmmoType a = registry.ammo(id);
                 ArmorType v = registry.vest(id);
-                if (v != null) for (int i = 0; i < amount; i++) items.add(registry.buildVest(v));
+                GrenadeType gr = registry.grenade(id);
+                if (gr != null) { int left = amount; while (left > 0) { int n = Math.min(left, 16); items.add(registry.buildGrenade(gr, n)); left -= n; } }
+                else if (v != null) for (int i = 0; i < amount; i++) items.add(registry.buildVest(v));
                 else if (g != null) for (int i = 0; i < amount; i++) { ItemStack gi = registry.buildGun(g); registry.applySkin(gi, g, target); items.add(gi); }
                 else if (m != null) for (int i = 0; i < amount; i++) items.add(registry.buildMag(m, m.capacity()));
                 else if (a != null) {
@@ -161,6 +169,7 @@ public final class FirearmsPlugin extends JavaPlugin {
                 for (MagType m : registry.mags()) sender.sendMessage(line(dir, m.model(), "mag " + m.id()));
                 for (AmmoType a : registry.ammos()) sender.sendMessage(line(dir, a.model(), "ammo " + a.id()));
                 for (ArmorType v : registry.vests()) sender.sendMessage(line(dir, v.model(), "vest " + v.id() + " (or " + v.model() + ".png icon)"));
+                for (GrenadeType gr : registry.grenades()) sender.sendMessage(line(dir, gr.model(), "grenade " + gr.id() + " (clips: unpin, throw)"));
                 for (GunType g : registry.guns()) {
                     String c = registry.casingModel(g);
                     if (c != null) sender.sendMessage(line(dir, c, "casing of " + g.id() + (c.equals(g.model() + "_casing") ? " (auto-detected)" : " - or add " + g.model() + "_casing.bbmodel")));
@@ -192,7 +201,7 @@ public final class FirearmsPlugin extends JavaPlugin {
 
     private boolean usage(CommandSender s) {
         s.sendMessage(Component.text("Firearms v" + getPluginMeta().getVersion() + (duplicateJars != null ? "  (WARNING: several jars: " + duplicateJars + ")" : ""), NamedTextColor.GOLD));
-        s.sendMessage(Component.text("/firearms list | give <gun|mag|ammo|vest> [amount] [player] | models | pack | check | reload | version", NamedTextColor.YELLOW));
+        s.sendMessage(Component.text("/firearms list | give <gun|mag|ammo|vest|grenade> [amount] [player] | models | pack | check | reload | version", NamedTextColor.YELLOW));
         return true;
     }
 
@@ -204,6 +213,7 @@ public final class FirearmsPlugin extends JavaPlugin {
             ids.addAll(registry.magIds());
             ids.addAll(registry.ammoIds());
             ids.addAll(registry.vestIds());
+            ids.addAll(registry.grenadeIds());
             return filter(ids.stream(), args[1]);
         }
         if (args.length == 4 && args[0].equalsIgnoreCase("give")) return filter(Bukkit.getOnlinePlayers().stream().map(Player::getName), args[3]);

@@ -1,0 +1,37 @@
+# Grenades. RIGHT-click = pull the pin ("unpin" animation), LEFT-click = throw ("throw" animation).
+#  kind      frag | incendiary | smoke
+#  fuse      seconds until the effect. cook: true = the fuse starts when the pin is pulled (hold it too long...),
+#            cook: false = the fuse starts when thrown
+#  radius    effect radius (blocks)
+#  damage    frag only: damage at the centre in half-hearts, linear falloff to the edge; walls shield
+#  duration  incendiary: seconds the ground burns; smoke: seconds the cloud lasts
+#  speed     throw speed in blocks/tick
+#  model     custom_model_data string = models/<model>.bbmodel (placeholder if missing); icon = models/<model>_icon.png
+grenades:
+  frag:
+    name: "&fFrag Grenade"
+    model: grenade_frag
+    kind: frag
+    fuse: 3.0
+    cook: true
+    radius: 5.0
+    damage: 16.0
+    speed: 1.3
+  incendiary:
+    name: "&cIncendiary Grenade"
+    model: grenade_incendiary
+    kind: incendiary
+    fuse: 2.5
+    cook: false
+    radius: 3.5
+    duration: 10
+    speed: 1.2
+  smoke:
+    name: "&7Smoke Bomb"
+    model: grenade_smoke
+    kind: smoke
+    fuse: 2.0
+    cook: false
+    radius: 4.0
+    duration: 20
+    speed: 1.2

@@ -32,12 +32,15 @@ public final class Registry {
     private final Map<String, MagType> mags = new LinkedHashMap<>();
     private final Map<String, AmmoType> ammo = new LinkedHashMap<>();
     private final Map<String, ArmorType> vests = new LinkedHashMap<>();
+    private final Map<String, GrenadeType> grenades = new LinkedHashMap<>();
+    /** model -> skin pixel order (u,v pairs) for the classic / slim hand variants (from anim-index.yml). */
+    private final Map<String, List<int[]>> skinClassic = new LinkedHashMap<>(), skinSlim = new LinkedHashMap<>();
     /** model -> clip -> [frames, frameTicks], written by the pack generator (models/anim-index.yml). */
     private final Map<String, Map<String, int[]>> anims = new LinkedHashMap<>();
     /** model -> clip -> ["tick:sound", ...] from the .bbmodel sound keyframes. */
     private final Map<String, Map<String, List<String>>> animSounds = new LinkedHashMap<>();
 
-    final NamespacedKey gunKey, magKey, ammoKey, roundsKey, uidKey, craterKey, vestKey;
+    final NamespacedKey gunKey, magKey, ammoKey, roundsKey, uidKey, craterKey, vestKey, grenadeKey;
 
     /** True once a gun was successfully given the adventure-mode can_break component. */
     static boolean canBreakOk = false;
@@ -53,12 +56,23 @@ public final class Registry {
         uidKey = new NamespacedKey(plugin, "uid");
         craterKey = new NamespacedKey(plugin, "crater");
         vestKey = new NamespacedKey(plugin, "vest");
+        grenadeKey = new NamespacedKey(plugin, "grenade");
     }
 
     // ------------------------------------------------------------------ loading
 
     public void load() {
-        guns.clear(); mags.clear(); ammo.clear(); anims.clear(); vests.clear(); animSounds.clear();
+        guns.clear(); mags.clear(); ammo.clear(); anims.clear(); vests.clear(); animSounds.clear(); grenades.clear(); skinClassic.clear(); skinSlim.clear();
+        File grf = new File(plugin.getDataFolder(), "grenades.yml");
+        if (!grf.exists()) plugin.saveResource("grenades.yml", false);
+        ConfigurationSection grs = YamlConfiguration.loadConfiguration(grf).getConfigurationSection("grenades");
+        if (grs != null) for (String id : grs.getKeys(false)) {
+            ConfigurationSection s = grs.getConfigurationSection(id);
+            if (s == null) continue;
+            grenades.put(id.toLowerCase(), new GrenadeType(id.toLowerCase(), s.getString("name", id), s.getString("model", "grenade_" + id.toLowerCase()),
+                s.getString("kind", "frag").toLowerCase(), s.getDouble("fuse", 3), s.getBoolean("cook", false), s.getDouble("radius", 4),
+                s.getDouble("damage", 12), s.getDouble("duration", 10), s.getDouble("speed", 1.2)));
+        }
         ConfigurationSection vs = plugin.getConfig().getConfigurationSection("armor");
         if (vs != null) for (String id : vs.getKeys(false)) {
             ConfigurationSection s = vs.getConfigurationSection(id);
@@ -141,7 +155,9 @@ public final class Registry {
                 if (s == null) continue;
                 Map<String, int[]> clips = new LinkedHashMap<>();
                 Map<String, List<String>> snd = new LinkedHashMap<>();
+                if (s.contains("skin-classic")) { skinClassic.put(model, pixels(s.getString("skin-classic", ""))); skinSlim.put(model, pixels(s.getString("skin-slim", ""))); }
                 for (String clip : s.getKeys(false)) {
+                    if (clip.startsWith("skin-")) continue;
                     clips.put(clip, new int[]{ s.getInt(clip + ".frames", 0), Math.max(1, s.getInt(clip + ".frame-ticks", 1)) });
                     if (s.contains(clip + ".sounds")) snd.put(clip, s.getStringList(clip + ".sounds"));
                 }
@@ -226,6 +242,39 @@ public final class Registry {
         return a == null || a[0] <= 0 ? null : a;
     }
 
+    private static List<int[]> pixels(String joined) {
+        List<int[]> out = new ArrayList<>();
+        if (joined == null || joined.isEmpty()) return out;
+        for (String p : joined.split(";")) {
+            String[] uv = p.split(",");
+            if (uv.length == 2) try { out.add(new int[]{ Integer.parseInt(uv[0].trim()), Integer.parseInt(uv[1].trim()) }); } catch (NumberFormatException ignored) { }
+        }
+        return out;
+    }
+
+    public GrenadeType grenade(String id) { return id == null ? null : grenades.get(id.toLowerCase()); }
+    public List<String> grenadeIds() { return new ArrayList<>(grenades.keySet()); }
+    public java.util.Collection<GrenadeType> grenades() { return Collections.unmodifiableCollection(grenades.values()); }
+
+    public ItemStack buildGrenade(GrenadeType g, int amount) {
+        ItemStack item = new ItemStack(base(), Math.max(1, Math.min(16, amount)));
+        ItemMeta meta = item.getItemMeta();
+        meta.displayName(name(g.name()));
+        meta.lore(List.of(
+            Component.text("Right-click: pull the pin" + (g.cook() ? " (fuse " + trim(g.fuse()) + " s starts!)" : ""), NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false),
+            Component.text("Left-click: throw", NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false)));
+        setModel(meta, g.model());
+        meta.setMaxStackSize(16);
+        meta.getPersistentDataContainer().set(grenadeKey, PersistentDataType.STRING, g.id());
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    public GrenadeType grenadeOf(ItemStack it) {
+        if (it == null || !it.hasItemMeta()) return null;
+        return grenade(it.getItemMeta().getPersistentDataContainer().get(grenadeKey, PersistentDataType.STRING));
+    }
+
     /** "tick:firearms:sound" entries of a clip, or an empty list. */
     public List<String> animSounds(String model, String clip) {
         Map<String, List<String>> m = animSounds.get(model);
@@ -279,17 +328,26 @@ public final class Registry {
 
     /** Write the holder's skin pixel colours into the gun's custom_model_data.colors (the arms' tints). */
     public boolean applySkin(ItemStack gun, GunType type, org.bukkit.entity.Player holder) {
-        if (!armsEnabled(type)) return false;
-        List<org.bukkit.Color> colors = ArmSkin.colors(holder.getUniqueId(), leftArm(type));
+        boolean slim = ArmSkin.slim(holder);
+        List<int[]> order = skinClassic.get(type.model());
+        List<org.bukkit.Color> colors;
+        if (order != null) {                                     // hands modelled in the .bbmodel
+            List<int[]> use = slim && skinSlim.get(type.model()) != null && !skinSlim.get(type.model()).isEmpty() ? skinSlim.get(type.model()) : order;
+            colors = ArmSkin.colorsFor(holder.getUniqueId(), use);
+        } else if (armsEnabled(type)) {                          // the old generated arms
+            colors = ArmSkin.colors(holder.getUniqueId(), leftArm(type));
+        } else return false;
         if (colors == null) return false;
         ItemMeta meta = gun.getItemMeta();
         if (meta == null) return false;
         NamespacedKey skinOf = new NamespacedKey(plugin, "skin_of");
-        if (holder.getUniqueId().toString().equals(meta.getPersistentDataContainer().get(skinOf, PersistentDataType.STRING))) return false;
+        String stamp = holder.getUniqueId() + ":" + (slim ? 1 : 0) + ":" + colors.size();
+        if (stamp.equals(meta.getPersistentDataContainer().get(skinOf, PersistentDataType.STRING))) return false;
         var cmd = meta.getCustomModelDataComponent();
         cmd.setColors(colors);
+        cmd.setFlags(List.of(slim));                             // flag 0 = slim -> the pack shows the slim hands
         meta.setCustomModelDataComponent(cmd);
-        meta.getPersistentDataContainer().set(skinOf, PersistentDataType.STRING, holder.getUniqueId().toString());
+        meta.getPersistentDataContainer().set(skinOf, PersistentDataType.STRING, stamp);
         gun.setItemMeta(meta);
         return true;
     }

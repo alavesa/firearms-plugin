@@ -79,6 +79,17 @@ Copy that file to the server as `plugins/Firearms/models/sounds/m4_shot.ogg` (sa
 
 The gunshot itself (`sound:` / `pitch:` in guns.yml) is a normal Minecraft or pack sound id and does not need a keyframe.
 
+## 4b. Grenades
+
+`plugins/Firearms/grenades.yml` defines the grenades (frag, incendiary, smoke by default). Each has a `model:` (`grenade_frag.bbmodel` etc., placeholder if missing) and uses two clips:
+
+| Clip | Names that match | When |
+|---|---|---|
+| `unpin` | unpin, pin, arm | right-click (pull the pin; with `cook: true` the fuse starts now) |
+| `throw` | throw, toss, lob | left-click; the grenade leaves the hand when the clip ends |
+
+Hands with the player's skin work in grenade models exactly like in guns (see HANDS.md). Icons: `models/grenade_frag_icon.png` or the generated label.
+
 ## 5. Checking without rebuilding
 
 `/firearms check` runs the whole conversion in memory and prints the per-model sizes and every warning, without writing the pack. `plugins/Firearms/pack-report.txt` (written by `/firearms pack`) lists the models folder, every custom_model_data → model path mapping and the warnings.

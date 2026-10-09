@@ -102,6 +102,19 @@ public final class ArmSkin {
         return out;
     }
 
+    /** Colours for an arbitrary (u,v) pixel order - the hands modelled in a .bbmodel. */
+    public static List<Color> colorsFor(UUID id, List<int[]> order) {
+        int[] px = cache.get(id);
+        if (px == null) return null;
+        List<Color> out = new ArrayList<>();
+        for (int[] uv : order) {
+            int u = Math.max(0, Math.min(63, uv[0])), v = Math.max(0, Math.min(63, uv[1]));
+            int argb = px[v * 64 + u];
+            out.add(((argb >>> 24) & 255) < 16 ? Color.fromRGB(0xC58C5E) : Color.fromRGB((argb >> 16) & 255, (argb >> 8) & 255, argb & 255));
+        }
+        return out;
+    }
+
     private static Color color(int[] px, Pixel p) {
         int argb = px[p.v() * 64 + p.u()];
         if (((argb >>> 24) & 255) < 16) {

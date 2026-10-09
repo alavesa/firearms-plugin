@@ -66,7 +66,15 @@ casings:
   max: 300               # oldest are removed first
 # per gun: casing: <model> (default "casing", models/casing.bbmodel or a placeholder), eject: "right,up,forward"
 
-# ---- First-person ARMS with the player's own skin ----
+# ---- Hands modelled in the .bbmodel, painted with the player's skin (see docs/HANDS.md) ----
+# Cubes in groups named hand/arm whose faces use a texture named skin/steve/alex/player/template are turned into one
+# tinted quad per skin pixel; groups named *slim* form the slim-arm variant chosen per player automatically.
+hands:
+  enabled: true
+  group-keywords: [hand, arm]
+  texture-keywords: [skin, steve, alex, player, template]
+
+# ---- (older) generated first-person ARMS - off by default, superseded by hands in the .bbmodel ----
 # One pack for everyone: each arm is built from one tiny quad per skin pixel, each with its own tint index, and the
 # plugin writes the holder's skin colours into the gun's custom_model_data.colors (fetched from the player's
 # profile; Steve colours if the skin can't be fetched, e.g. offline-mode). Only shown in first person.

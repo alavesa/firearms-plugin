@@ -62,6 +62,9 @@ public final class PackGenerator {
     private final Map<String, String> fpVariant = new LinkedHashMap<>();        // cmd string -> first-person model path (gun + arms)
     private final Map<String, Integer> fpTints = new LinkedHashMap<>();         // cmd string -> number of arm tint indices
     private final Map<String, String> iconOf = new LinkedHashMap<>();           // cmd string -> flat GUI icon model path
+    private final Map<String, String[]> handVariant = new LinkedHashMap<>();    // cmd string -> [classic path, slim path] (hands modelled in the .bbmodel)
+    private final Map<String, int[]> handTints = new LinkedHashMap<>();         // cmd string -> [classic tint count, slim tint count]
+    private final Map<String, String[]> skinOrder = new LinkedHashMap<>();      // model -> ["u,v;u,v;...", slim list]
     private final Map<String, List<String>> soundEvents = new LinkedHashMap<>();// sound event -> files
     private GunType currentGun;
     private final List<String> report = new ArrayList<>();
@@ -92,13 +95,17 @@ public final class PackGenerator {
         for (MagType m : registry.mags()) model(dir, m.model(), "mag", done);
         for (AmmoType a : registry.ammos()) model(dir, a.model(), "ammo", done);
         model(dir, plugin.getConfig().getString("craters.model", "crater"), "crater", done);
+        for (GrenadeType gt : registry.grenades()) model(dir, gt.model(), "grenade", done);
         Set<String> casingModels = new LinkedHashSet<>();
         for (GunType g : registry.guns()) { String c = registry.casingModel(g); if (c != null) casingModels.add(c); }
         for (String c : casingModels) model(dir, c, "casing", done);
         currentName = null;   // everything below is shared (items file, textures, sounds) - not one model's size
         files.put("assets/" + NS + "/textures/item/arm_pixel.png", whitePng());
         // Flat GUI icons (Roblox-style label cards) for every gun: models/<model>_icon.png if you drew one, else generated.
-        if (plugin.getConfig().getBoolean("icons.enabled", true)) for (GunType g : registry.guns()) icon(dir, g);
+        if (plugin.getConfig().getBoolean("icons.enabled", true)) {
+            for (GunType g : registry.guns()) icon(dir, g.model(), g.name(), g.id());
+            for (GrenadeType gt : registry.grenades()) icon(dir, gt.model(), gt.name(), gt.id());
+        }
         if (!soundEvents.isEmpty()) {
             JsonObject sj = new JsonObject();
             for (var e : soundEvents.entrySet()) {
@@ -148,6 +155,9 @@ public final class PackGenerator {
             Map<String, List<String>> sm = clipSoundIndex.get(m.getKey());
             if (sm != null && sm.containsKey(c.getKey())) idx.set(m.getKey() + "." + c.getKey() + ".sounds", sm.get(c.getKey()));
         }
+        for (var e : skinOrder.entrySet()) { idx.set(e.getKey() + ".skin-classic", e.getValue()[0]); idx.set(e.getKey() + ".skin-slim", e.getValue()[1]); }
+        List<String> dedup = new ArrayList<>(new LinkedHashSet<>(warnings));   // the same cube is baked per variant
+        warnings.clear(); warnings.addAll(dedup);
         File zip = new File(plugin.getDataFolder(), "Firearms-pack.zip");
         long bytes = 0;
         for (byte[] b : files.values()) bytes += b.length;
@@ -195,6 +205,38 @@ public final class PackGenerator {
             m.addProperty("model", NS + ":item/" + e.getValue());
             String fp = fpVariant.get(e.getKey());
             String icon = iconOf.get(e.getKey());
+            String[] hv = handVariant.get(e.getKey());
+            if (hv != null && files.containsKey("assets/" + NS + "/models/item/" + hv[0] + ".json")) {
+                int[] ht = handTints.getOrDefault(e.getKey(), new int[]{0, 0});
+                JsonObject classic = tinted(hv[0], ht[0]);
+                JsonObject fpm;
+                if (!hv[1].equals(hv[0]) && files.containsKey("assets/" + NS + "/models/item/" + hv[1] + ".json")) {
+                    fpm = new JsonObject();
+                    fpm.addProperty("type", "minecraft:condition");
+                    fpm.addProperty("property", "minecraft:custom_model_data");
+                    fpm.addProperty("index", 0);                 // flag 0 = slim skin (set by the plugin per holder)
+                    fpm.add("on_true", tinted(hv[1], ht[1]));
+                    fpm.add("on_false", classic);
+                } else fpm = classic;
+                JsonObject sel = new JsonObject();
+                sel.addProperty("type", "minecraft:select");
+                sel.addProperty("property", "minecraft:display_context");
+                JsonArray sc = new JsonArray();
+                JsonObject fpCase = new JsonObject();
+                JsonArray when = new JsonArray(); when.add("firstperson_righthand"); when.add("firstperson_lefthand");
+                fpCase.add("when", when); fpCase.add("model", fpm); sc.add(fpCase);
+                if (icon != null && files.containsKey("assets/" + NS + "/models/item/" + icon + ".json")) {
+                    JsonObject gc = new JsonObject(); gc.addProperty("when", "gui");
+                    JsonObject im = new JsonObject(); im.addProperty("type", "minecraft:model"); im.addProperty("model", NS + ":item/" + icon);
+                    gc.add("model", im); sc.add(gc);
+                }
+                sel.add("cases", sc);
+                sel.add("fallback", m);
+                c.add("model", sel);
+                report.add(base + ": \"" + e.getKey() + "\" -> " + NS + ":item/" + e.getValue() + "  (first person hands: classic " + hv[0] + " " + ht[0] + " px" + (hv[1].equals(hv[0]) ? "" : ", slim " + hv[1] + " " + ht[1] + " px") + ")");
+                cases.add(c);
+                continue;
+            }
             if (icon != null && !files.containsKey("assets/" + NS + "/models/item/" + icon + ".json")) icon = null;
             if (fp != null && !files.containsKey("assets/" + NS + "/models/item/" + fp + ".json")) fp = null;
             if (fp == null && icon != null) {
@@ -284,6 +326,22 @@ public final class PackGenerator {
         put("assets/minecraft/items/" + base + ".json", GSON.toJson(root));
     }
 
+    private static JsonObject tinted(String path, int n) {
+        JsonObject m = new JsonObject();
+        m.addProperty("type", "minecraft:model");
+        m.addProperty("model", NS + ":item/" + path);
+        JsonArray tints = new JsonArray();
+        for (int k = 0; k < n; k++) {
+            JsonObject t = new JsonObject();
+            t.addProperty("type", "minecraft:custom_model_data");
+            t.addProperty("index", k);
+            t.addProperty("default", 0xC58C5E);
+            tints.add(t);
+        }
+        m.add("tints", tints);
+        return m;
+    }
+
     /** Vest item icon: its .bbmodel if present, else a generated flat icon (worn look = the dyed chestplate). */
     private void vest(File dir, ArmorType v, Set<String> done) throws IOException {
         String name = v.model();
@@ -371,6 +429,14 @@ public final class PackGenerator {
                 tex.addProperty("0", "minecraft:block/raw_gold_block");
                 tex.addProperty("particle", "minecraft:block/raw_gold_block");
                 elements.add(cube(new double[]{7.4, 7, 6}, new double[]{8.6, 8.2, 10}, "#0", new double[]{0, 0, 2, 5}, null));
+            }
+            case "grenade" -> {
+                tex.addProperty("0", "minecraft:block/deepslate");
+                tex.addProperty("1", "minecraft:block/iron_block");
+                tex.addProperty("particle", "minecraft:block/deepslate");
+                elements.add(cube(new double[]{6, 4, 6}, new double[]{10, 10, 10}, "#0", new double[]{0, 0, 4, 6}, null));
+                elements.add(cube(new double[]{7, 10, 7}, new double[]{9, 12, 9}, "#1", new double[]{0, 0, 2, 2}, null));
+                elements.add(cube(new double[]{9, 10.5, 7.5}, new double[]{11.5, 11.5, 8.5}, "#1", new double[]{0, 0, 3, 1}, null));
             }
             case "ammo" -> {
                 tex.addProperty("0", "minecraft:block/gold_block");
@@ -483,25 +549,25 @@ public final class PackGenerator {
         return tint;
     }
 
-    private void icon(File dir, GunType g) throws IOException {
-        String mp = path(g.model());
-        File custom = new File(dir, g.model() + "_icon.png");
-        byte[] png = custom.exists() ? Files.readAllBytes(custom.toPath()) : labelPng(g);
+    private void icon(File dir, String model, String displayName, String id) throws IOException {
+        String mp = path(model);
+        File custom = new File(dir, model + "_icon.png");
+        byte[] png = custom.exists() ? Files.readAllBytes(custom.toPath()) : labelPng(displayName, id);
         files.put("assets/" + NS + "/textures/item/icons/" + mp + ".png", png);
-        JsonObject model = new JsonObject();
-        model.addProperty("parent", "minecraft:item/generated");
+        JsonObject iconModel = new JsonObject();
+        iconModel.addProperty("parent", "minecraft:item/generated");
         JsonObject tex = new JsonObject();
         tex.addProperty("layer0", NS + ":item/icons/" + mp);
-        model.add("textures", tex);
-        put("assets/" + NS + "/models/item/" + mp + "_icon.json", GSON.toJson(model));
+        iconModel.add("textures", tex);
+        put("assets/" + NS + "/models/item/" + mp + "_icon.json", GSON.toJson(iconModel));
         for (String cmd : new ArrayList<>(cmdToModel.keySet()))
-            if (cmd.equals(g.model()) || cmd.startsWith(g.model() + "_")) iconOf.put(cmd, mp + "_icon");
+            if (cmd.equals(model) || cmd.startsWith(model + "_")) iconOf.put(cmd, mp + "_icon");
     }
 
     /** A 64x64 label card: dark rounded background, the gun's name in big letters (fitted), a thin accent bar. */
-    private byte[] labelPng(GunType g) throws IOException {
-        String text = g.name().replaceAll("&[0-9a-fk-or]", "").trim().toUpperCase(Locale.ROOT);
-        if (text.isEmpty()) text = g.id().toUpperCase(Locale.ROOT);
+    private byte[] labelPng(String displayName, String id) throws IOException {
+        String text = displayName.replaceAll("&[0-9a-fk-or]", "").trim().toUpperCase(Locale.ROOT);
+        if (text.isEmpty()) text = id.toUpperCase(Locale.ROOT);
         int size = 64;
         BufferedImage img = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
         java.awt.Graphics2D gfx = img.createGraphics();
@@ -627,6 +693,7 @@ public final class PackGenerator {
     private static final class Cube {
         String uuid, name = ""; double[] from, to, origin = {0, 0, 0}, rotation = {0, 0, 0}; double inflate = 0; JsonObject faces; Bone bone;
         boolean flash;   // a muzzle-flash cube modelled in the .bbmodel: hidden except on the flash frames
+        int tint = -1;   // >= 0: a skin pixel quad (hands) - face texture #skin, this tint index
     }
 
     private static final class Clip {
@@ -646,17 +713,28 @@ public final class PackGenerator {
         // --- textures
         Map<String, Integer> texIndex = new HashMap<>();      // uuid / id -> index
         List<double[]> texRes = new ArrayList<>();
+        List<BufferedImage> texImg = new ArrayList<>();
+        List<Boolean> texSkin = new ArrayList<>();
+        List<String> skinWords = lower(plugin.getConfig().getStringList("hands.texture-keywords"));
+        if (skinWords.isEmpty()) skinWords = List.of("skin", "steve", "alex", "player", "template");
         JsonObject textures = new JsonObject();
         int ti = 0;
         if (root.has("textures")) for (JsonElement te : root.getAsJsonArray("textures")) {
             JsonObject t = te.getAsJsonObject();
             String tname = str(t.get("name"), "tex" + ti).replaceAll("\\.png$", "").replaceAll("[^a-z0-9_]", "_").toLowerCase(Locale.ROOT);
             String src = str(t.get("source"), "");
+            BufferedImage img = null;
             if (src.contains("base64,")) {
-                putBytes("assets/" + NS + "/textures/item/" + mpath + "/" + tname + ".png", Base64.getDecoder().decode(src.substring(src.indexOf("base64,") + 7)));
+                byte[] png = Base64.getDecoder().decode(src.substring(src.indexOf("base64,") + 7));
+                putBytes("assets/" + NS + "/textures/item/" + mpath + "/" + tname + ".png", png);
+                try { img = ImageIO.read(new java.io.ByteArrayInputStream(png)); } catch (Exception ignored) { }
             } else {
                 warnings.add(name + ": texture " + tname + " has no embedded image");
             }
+            texImg.add(img);
+            boolean skin = false;
+            for (String w : skinWords) if (tname.contains(w)) skin = true;
+            texSkin.add(skin && img != null);
             textures.addProperty(String.valueOf(ti), NS + ":item/" + mpath + "/" + tname);
             if (ti == 0) textures.addProperty("particle", NS + ":item/" + mpath + "/" + tname);
             texIndex.put(str(t.get("uuid"), "u" + ti), ti);
@@ -664,7 +742,7 @@ public final class PackGenerator {
             texRes.add(new double[]{ num(t.get("uv_width"), resW), num(t.get("uv_height"), resH) });
             ti++;
         }
-        if (ti == 0) { textures.addProperty("0", "minecraft:block/iron_block"); textures.addProperty("particle", "minecraft:block/iron_block"); texRes.add(new double[]{resW, resH}); }
+        if (ti == 0) { textures.addProperty("0", "minecraft:block/iron_block"); textures.addProperty("particle", "minecraft:block/iron_block"); texRes.add(new double[]{resW, resH}); texImg.add(null); texSkin.add(false); }
 
         // --- cubes
         Map<String, Cube> cubes = new LinkedHashMap<>();
@@ -696,6 +774,41 @@ public final class PackGenerator {
             if (fl) flashCubes++;
         }
         if (flashCubes > 0) report.add(name + ": muzzle flash taken from the model (" + flashCubes + " cube(s) named flash)");
+
+        // --- hands with the player's skin: cubes in groups named hand/arm whose faces use a "skin" texture are
+        // exploded into one quad per skin pixel (tinted from custom_model_data.colors); "_slim" groups form the
+        // slim variant, chosen per player with custom_model_data flag 0.
+        List<String> handWords = lower(plugin.getConfig().getStringList("hands.group-keywords"));
+        if (handWords.isEmpty()) handWords = List.of("hand", "arm");
+        Map<String, Cube> plainCubes = new LinkedHashMap<>(), classicCubes = new LinkedHashMap<>(), slimCubes = new LinkedHashMap<>();
+        List<int[]> orderC = new ArrayList<>(), orderS = new ArrayList<>();
+        boolean hasHands = false, hasSlim = false;
+        if (plugin.getConfig().getBoolean("hands.enabled", true)) {
+            for (Cube c : cubes.values()) {
+                boolean hand = containsAny(c.name, handWords), slim = c.name.toLowerCase(Locale.ROOT).contains("slim");
+                for (Bone w = c.bone; w != null; w = w.parent) { if (containsAny(w.name, handWords)) hand = true; if (w.name.toLowerCase(Locale.ROOT).contains("slim")) slim = true; }
+                boolean usesSkin = false;
+                for (String f : FACE) if (c.faces.has(f)) { Integer idx = texIdx(c.faces.getAsJsonObject(f), texIndex); if (idx != null && idx < texSkin.size() && texSkin.get(idx)) usesSkin = true; }
+                if (!hand || !usesSkin) { plainCubes.put(c.uuid, c); classicCubes.put(c.uuid, c); slimCubes.put(c.uuid, c); continue; }
+                hasHands = true;
+                if (slim) hasSlim = true;
+                List<Cube> quads = explode(c, texIndex, texImg, texRes, slim ? orderS : orderC);
+                for (Cube q : quads) (slim ? slimCubes : classicCubes).put(q.uuid, q);
+            }
+            if (hasHands && !hasSlim) { slimCubes = classicCubes; orderS = orderC; }
+            if (hasHands && hasSlim) {
+                // classic variant must not contain slim quads and vice versa: the non-slim hand quads were added to
+                // classicCubes only, slim ones to slimCubes only, shared plain cubes to both - already correct.
+                // But slim hands usually sit INSIDE the classic hand box: make sure classic quads are not in slim.
+            }
+        }
+        if (hasHands) {
+            textures.addProperty("skin", NS + ":item/arm_pixel");
+            skinOrder.put(name, new String[]{ joinPixels(orderC), joinPixels(orderS) });
+            report.add(name + ": hands with player skin - " + orderC.size() + " classic / " + orderS.size() + " slim skin pixels" + (hasSlim ? "" : " (no _slim group: slim players get the classic hands)"));
+        }
+        final boolean handsOn = hasHands, slimOn = hasSlim;
+        final Map<String, Cube> cubesPlain = hasHands ? plainCubes : cubes, cubesC = classicCubes, cubesS = slimCubes;
         // The "display bone": per animation, the top-level group that is ANIMATED and holds the most cubes. Its motion
         // becomes the first-person display transform (exact). Guns whose animated root was not the biggest group
         // used to get their whole-gun motion baked into cubes (torn apart) - this picks the right bone per clip.
@@ -733,11 +846,12 @@ public final class PackGenerator {
         double[] flashAt = flashSpot(name, cubes);
 
         // --- rest model
-        JsonObject rest = bake(name, cubes, bones, null, textures, texIndex, texRes, display, null, 0, S, null);
+        JsonObject rest = bake(name, cubesPlain, bones, null, textures, texIndex, texRes, display, null, 0, S, null);
         put("assets/" + NS + "/models/item/" + mpath + ".json", GSON.toJson(rest));
         cmdToModel.put(name, mpath);
-        boolean arms = currentGun != null && registry.armsEnabled(currentGun);
+        boolean arms = currentGun != null && registry.armsEnabled(currentGun) && !handsOn;
         if (arms) armsVariant(name, mpath, rest);
+        if (handsOn) handVariants(name, mpath, cubesC, cubesS, slimOn, bones, null, textures, texIndex, texRes, display, null, 0, S, null);
 
         // --- animations -> frames
         int frameTicks = Math.max(1, plugin.getConfig().getInt("anim.frame-ticks", 1));
@@ -795,17 +909,115 @@ public final class PackGenerator {
             for (int i = 1; i <= n; i++) {
                 double t = n == 1 ? clip.length : (i - 1) * (clip.length / (n - 1));
                 boolean flashFrame = key.equals("fire") && i <= Math.max(0, plugin.getConfig().getInt("flash.frames", 1));
-                JsonObject frame = bake(name, cubes, bones, pickRoot(topBones, clip), textures, texIndex, texRes, display, clip, t, S, flashFrame ? flashAt : null);
+                Bone rb = pickRoot(topBones, clip);
+                JsonObject frame = bake(name, cubesPlain, bones, rb, textures, texIndex, texRes, display, clip, t, S, flashFrame ? flashAt : null);
                 String fname = name + "_" + key + "_" + i;
                 put("assets/" + NS + "/models/item/" + mpath + "_" + key + "_" + i + ".json", GSON.toJson(frame));
                 cmdToModel.put(fname, mpath + "_" + key + "_" + i);
                 if (arms) armsVariant(fname, mpath + "_" + key + "_" + i, frame);
+                if (handsOn) handVariants(fname, mpath + "_" + key + "_" + i, cubesC, cubesS, slimOn, bones, rb, textures, texIndex, texRes, display, clip, t, S, flashFrame ? flashAt : null);
                 frames++;
             }
             clips.put(key, new int[]{n, clipTicks});
             if (!clipSounds.isEmpty()) clipSoundIndex.computeIfAbsent(name, x -> new LinkedHashMap<>()).put(key, clipSounds);
         }
         if (!clips.isEmpty()) animIndex.put(name, clips);
+    }
+
+    private static boolean containsAny(String name, List<String> words) {
+        if (name == null) return false;
+        String l = name.toLowerCase(Locale.ROOT);
+        for (String w : words) if (!w.isEmpty() && l.contains(w)) return true;
+        return false;
+    }
+
+    private static Integer texIdx(JsonObject face, Map<String, Integer> texIndex) {
+        JsonElement tex = face.get("texture");
+        if (tex == null || tex.isJsonNull()) return null;
+        return tex.isJsonPrimitive() && tex.getAsJsonPrimitive().isNumber() ? Integer.valueOf(tex.getAsInt()) : texIndex.get(tex.getAsString());
+    }
+
+    private static String joinPixels(List<int[]> px) {
+        StringBuilder sb = new StringBuilder();
+        for (int[] p : px) { if (sb.length() > 0) sb.append(';'); sb.append(p[0]).append(',').append(p[1]); }
+        return sb.toString();
+    }
+
+    /** One hand cube -> one thin quad per skin pixel of every face that uses the skin texture (faces with other
+     *  textures stay as one cube). The quads keep the cube's bone/origin/rotation so they animate with it. */
+    private List<Cube> explode(Cube c, Map<String, Integer> texIndex, List<BufferedImage> texImg, List<double[]> texRes, List<int[]> order) {
+        List<Cube> out = new ArrayList<>();
+        JsonObject rest = new JsonObject();
+        for (int fi = 0; fi < 6; fi++) {
+            String f = FACE[fi];
+            if (!c.faces.has(f)) continue;
+            JsonObject face = c.faces.getAsJsonObject(f);
+            Integer idx = texIdx(face, texIndex);
+            BufferedImage img = idx != null && idx < texImg.size() ? texImg.get(idx) : null;
+            if (idx == null || img == null || !face.has("uv")) { rest.add(f, face); continue; }
+            double[] res = idx < texRes.size() ? texRes.get(idx) : new double[]{img.getWidth(), img.getHeight()};
+            double[] uv = vec4(face.get("uv"));
+            double sx = img.getWidth() / res[0], sy = img.getHeight() / res[1];
+            int u1 = (int) Math.round(uv[0] * sx), v1 = (int) Math.round(uv[1] * sy), u2 = (int) Math.round(uv[2] * sx), v2 = (int) Math.round(uv[3] * sy);
+            int w = Math.abs(u2 - u1), h = Math.abs(v2 - v1);
+            if (w == 0 || h == 0) continue;
+            int frot = face.has("rotation") ? (int) num(face.get("rotation"), 0) : 0;
+            // in-plane axes of this face: u along FRIGHT, v downward = -FUP (rotated by the face's uv rotation)
+            int[] aU = FRIGHT[fi].clone(), aV = neg(FUP[fi]);
+            for (int r = 0; r < ((frot % 360) + 360) % 360 / 90; r++) { int[] t = aU; aU = aV; aV = neg(t); }
+            int nAxis = fi < 2 ? 2 : fi < 4 ? 0 : 1;   // normal axis: north/south z, east/west x, up/down y
+            boolean positive = DIR[fi][nAxis] > 0;
+            double plane = positive ? c.to[nAxis] + c.inflate : c.from[nAxis] - c.inflate;
+            for (int j = 0; j < h; j++) for (int i = 0; i < w; i++) {
+                int pu = u1 < u2 ? u1 + i : u1 - 1 - i, pv = v1 < v2 ? v1 + j : v1 - 1 - j;
+                if (pu < 0 || pv < 0 || pu >= img.getWidth() || pv >= img.getHeight()) continue;
+                if (((img.getRGB(pu, pv) >>> 24) & 255) < 16) continue;   // transparent in the template: no quad
+                Cube q = new Cube();
+                q.uuid = c.uuid + "_" + f + "_" + i + "_" + j;
+                q.name = c.name; q.bone = c.bone; q.origin = c.origin; q.rotation = c.rotation;
+                q.from = new double[3]; q.to = new double[3];
+                for (int ax = 0; ax < 3; ax++) {
+                    double lo = c.from[ax] - c.inflate, hi = c.to[ax] + c.inflate, len = hi - lo;
+                    if (ax == nAxis) { q.from[ax] = positive ? plane - 0.01 : plane; q.to[ax] = positive ? plane : plane + 0.01; continue; }
+                    double f0, f1;
+                    if (aU[ax] != 0) { double a = (double) i / w, b = (double) (i + 1) / w; if (aU[ax] > 0) { f0 = a; f1 = b; } else { f0 = 1 - b; f1 = 1 - a; } }
+                    else { double a = (double) j / h, b = (double) (j + 1) / h; if (aV[ax] > 0) { f0 = a; f1 = b; } else { f0 = 1 - b; f1 = 1 - a; } }
+                    q.from[ax] = lo + len * f0; q.to[ax] = lo + len * f1;
+                }
+                q.faces = new JsonObject();
+                JsonObject qf = new JsonObject();
+                qf.add("uv", arr(0, 0, 16, 16));
+                qf.addProperty("texture", "#skin");
+                q.faces.add(f, qf);
+                q.tint = order.size();
+                order.add(new int[]{pu, pv});
+                out.add(q);
+            }
+        }
+        if (rest.size() > 0) {
+            Cube keep = new Cube();
+            keep.uuid = c.uuid + "_rest"; keep.name = c.name; keep.bone = c.bone; keep.origin = c.origin; keep.rotation = c.rotation;
+            keep.from = c.from; keep.to = c.to; keep.inflate = c.inflate; keep.faces = rest;
+            out.add(keep);
+        }
+        return out;
+    }
+
+    /** Write the classic (+ slim) first-person variants of a model/frame and remember them for the items file. */
+    private void handVariants(String cmd, String mpath, Map<String, Cube> cubesC, Map<String, Cube> cubesS, boolean slim, Map<String, Bone> bones, Bone root,
+                              JsonObject textures, Map<String, Integer> texIndex, List<double[]> texRes, JsonObject display, Clip clip, double t, double scale, double[] flashAt) {
+        JsonObject cm = bake(currentName, cubesC, bones, root, textures, texIndex, texRes, display, clip, t, scale, flashAt);
+        put("assets/" + NS + "/models/item/" + mpath + "_c.json", GSON.toJson(cm));
+        String sp = mpath + "_c";
+        if (slim) {
+            JsonObject sm = bake(currentName, cubesS, bones, root, textures, texIndex, texRes, display, clip, t, scale, flashAt);
+            put("assets/" + NS + "/models/item/" + mpath + "_s.json", GSON.toJson(sm));
+            sp = mpath + "_s";
+        }
+        handVariant.put(cmd, new String[]{ mpath + "_c", sp });
+        String[] ord = skinOrder.get(currentName);
+        int nc = ord == null || ord[0].isEmpty() ? 0 : ord[0].split(";").length, ns = ord == null || ord[1].isEmpty() ? 0 : ord[1].split(";").length;
+        handTints.put(cmd, new int[]{ nc, ns });
     }
 
     private static boolean isFlashName(String n) {
@@ -816,6 +1028,8 @@ public final class PackGenerator {
 
     private static final Map<String, List<String>> DEFAULT_NAMES = new LinkedHashMap<>();
     static {
+        DEFAULT_NAMES.put("unpin", List.of("unpin", "pin", "arm"));
+        DEFAULT_NAMES.put("throw", List.of("throw", "toss", "lob"));
         DEFAULT_NAMES.put("fire", List.of("fire", "shoot", "shot", "recoil"));
         DEFAULT_NAMES.put("reload", List.of("reload", "rel", "mag"));
         DEFAULT_NAMES.put("equip", List.of("equip", "draw", "deploy", "pull", "ready"));
@@ -1047,6 +1261,16 @@ public final class PackGenerator {
             e.add("to", arr(to));
             if (rotation != null) e.add("rotation", rotation);
             if (c.flash) e.addProperty("shade", false);   // glows evenly, like the generated flash
+            if (c.tint >= 0) {
+                JsonObject qf = new JsonObject();
+                String only = cfaces.keySet().iterator().next();
+                JsonObject src = cfaces.getAsJsonObject(only).deepCopy();
+                src.addProperty("tintindex", c.tint);
+                qf.add(only, src);
+                e.add("faces", qf);
+                elements.add(e);
+                continue;
+            }
             JsonObject faces = new JsonObject();
             for (String f : new String[]{"north", "south", "east", "west", "up", "down"}) {
                 if (!cfaces.has(f)) continue;
