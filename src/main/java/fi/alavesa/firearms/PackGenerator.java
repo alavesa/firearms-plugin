@@ -625,7 +625,8 @@ public final class PackGenerator {
     }
 
     private static final class Cube {
-        String uuid; double[] from, to, origin = {0, 0, 0}, rotation = {0, 0, 0}; double inflate = 0; JsonObject faces; Bone bone;
+        String uuid, name = ""; double[] from, to, origin = {0, 0, 0}, rotation = {0, 0, 0}; double inflate = 0; JsonObject faces; Bone bone;
+        boolean flash;   // a muzzle-flash cube modelled in the .bbmodel: hidden except on the flash frames
     }
 
     private static final class Clip {
@@ -673,6 +674,7 @@ public final class PackGenerator {
             if (e.has("visibility") && !e.get("visibility").getAsBoolean()) continue;
             Cube c = new Cube();
             c.uuid = str(e.get("uuid"), "e" + cubes.size());
+            c.name = str(e.get("name"), "");
             c.from = vec(e.get("from")); c.to = vec(e.get("to"));
             if (e.has("origin")) c.origin = vec(e.get("origin"));
             if (e.has("inflate")) c.inflate = num(e.get("inflate"), 0);
@@ -686,6 +688,14 @@ public final class PackGenerator {
         List<Bone> top = new ArrayList<>();
         Map<String, Bone> bones = new HashMap<>();
         if (root.has("outliner")) for (JsonElement oe : root.getAsJsonArray("outliner")) parseOutliner(oe, null, top, bones, cubes);
+        int flashCubes = 0;
+        for (Cube c : cubes.values()) {
+            boolean fl = isFlashName(c.name);
+            for (Bone w = c.bone; w != null && !fl; w = w.parent) fl = isFlashName(w.name);
+            c.flash = fl;
+            if (fl) flashCubes++;
+        }
+        if (flashCubes > 0) report.add(name + ": muzzle flash taken from the model (" + flashCubes + " cube(s) named flash)");
         // The "display bone": per animation, the top-level group that is ANIMATED and holds the most cubes. Its motion
         // becomes the first-person display transform (exact). Guns whose animated root was not the biggest group
         // used to get their whole-gun motion baked into cubes (torn apart) - this picks the right bone per clip.
@@ -772,10 +782,16 @@ public final class PackGenerator {
                     }
                 }
             }
+            // Frame count is PER ANIMATION: guns.yml anim.<clip>.frames, else the animation's own Blockbench
+            // snapping (keyframes per second), else length x 20 / frame-ticks; capped by anim.max-frames (per gun or config).
             int maxFrames = Math.max(2, plugin.getConfig().getInt("anim.max-frames", 40));
-            int clipTicks = frameTicks;
-            int n = (int) Math.max(1, Math.ceil(clip.length * 20.0 / clipTicks));
-            if (n > maxFrames) { clipTicks = (int) Math.ceil(clip.length * 20.0 / maxFrames); n = (int) Math.max(1, Math.ceil(clip.length * 20.0 / clipTicks)); }
+            if (currentGun != null && currentGun.animCfg() != null && currentGun.animCfg().contains("max-frames")) maxFrames = Math.max(2, currentGun.animCfg().getInt("max-frames"));
+            int n = 0;
+            if (currentGun != null && currentGun.animCfg() != null && currentGun.animCfg().contains(key + ".frames")) n = currentGun.animCfg().getInt(key + ".frames");
+            if (n <= 0 && a.has("snapping")) { double snap = num(a.get("snapping"), 0); if (snap > 0) n = (int) Math.ceil(clip.length * snap); }
+            if (n <= 0) n = (int) Math.ceil(clip.length * 20.0 / frameTicks);
+            n = Math.max(1, Math.min(maxFrames, n));
+            int clipTicks = Math.max(1, (int) Math.round(clip.length * 20.0 / n));
             for (int i = 1; i <= n; i++) {
                 double t = n == 1 ? clip.length : (i - 1) * (clip.length / (n - 1));
                 boolean flashFrame = key.equals("fire") && i <= Math.max(0, plugin.getConfig().getInt("flash.frames", 1));
@@ -792,13 +808,39 @@ public final class PackGenerator {
         if (!clips.isEmpty()) animIndex.put(name, clips);
     }
 
-    private static String clipKey(String animName) {
-        String n = animName.toLowerCase(Locale.ROOT);
-        if (n.contains("shoot") || n.contains("fire") || n.contains("recoil")) return "fire";
-        if (n.contains("reload")) return "reload";
-        if (n.contains("equip") || n.contains("draw") || n.contains("deploy") || n.contains("pull")) return "equip";
-        if (n.contains("pump") || n.contains("rack") || n.contains("cock") || n.contains("bolt")) return "pump";
+    private static boolean isFlashName(String n) {
+        if (n == null) return false;
+        String l = n.toLowerCase(Locale.ROOT).replace("_", "").replace(" ", "");
+        return l.contains("flash") || l.contains("muzzle");
+    }
+
+    private static final Map<String, List<String>> DEFAULT_NAMES = new LinkedHashMap<>();
+    static {
+        DEFAULT_NAMES.put("fire", List.of("fire", "shoot", "shot", "recoil"));
+        DEFAULT_NAMES.put("reload", List.of("reload", "rel", "mag"));
+        DEFAULT_NAMES.put("equip", List.of("equip", "draw", "deploy", "pull", "ready"));
+        DEFAULT_NAMES.put("pump", List.of("pump", "rack", "cock", "bolt", "cycle"));
+        DEFAULT_NAMES.put("inspect", List.of("inspect", "look", "check", "idle"));
+    }
+
+    /** Which clip an animation name belongs to. Keywords come from guns.yml `anim-names:` (per gun), then config
+     *  `anim.names`, then the built-in defaults; an exact name match wins over a substring match. */
+    private String clipKey(String animName) {
+        String n = animName.toLowerCase(Locale.ROOT).trim();
+        Map<String, List<String>> table = new LinkedHashMap<>(DEFAULT_NAMES);
+        org.bukkit.configuration.ConfigurationSection cfg = plugin.getConfig().getConfigurationSection("anim.names");
+        if (cfg != null) for (String clip : cfg.getKeys(false)) table.put(clip, lower(cfg.getStringList(clip)));
+        if (currentGun != null && currentGun.animNames() != null)
+            for (String clip : currentGun.animNames().getKeys(false)) table.put(clip, lower(currentGun.animNames().getStringList(clip)));
+        for (var e : table.entrySet()) for (String k : e.getValue()) if (n.equals(k)) return e.getKey();
+        for (var e : table.entrySet()) for (String k : e.getValue()) if (!k.isEmpty() && n.contains(k)) return e.getKey();
         return n.replaceAll("[^a-z0-9_]", "_");
+    }
+
+    private static List<String> lower(List<String> in) {
+        List<String> out = new ArrayList<>();
+        for (String x : in) out.add(x.toLowerCase(Locale.ROOT).trim());
+        return out;
     }
 
     private static void parseOutliner(JsonElement oe, Bone parent, List<Bone> top, Map<String, Bone> bones, Map<String, Cube> cubes) {
@@ -946,7 +988,10 @@ public final class PackGenerator {
         Map<Bone, Baked> baked = new HashMap<>();
         Set<String> warned = new LinkedHashSet<>();
         JsonArray elements = new JsonArray();
+        boolean modelHasFlash = false;
+        for (Cube c : cubes.values()) if (c.flash) modelHasFlash = true;
         for (Cube c : cubes.values()) {
+            if (c.flash && flashAt == null) continue;   // the model's own muzzle flash: only on the flash frames
             Baked bb = c.bone == null ? null : bakeBone(c.bone, baked, rot, pos, name, warned);
             // The ONE residual rotation a Java cube gets: the nearest rotated bone up the chain (same-axis angles
             // further up are folded in), else the cube's own residual. Exact 90-degree parts are already in `place`.
@@ -1001,6 +1046,7 @@ public final class PackGenerator {
             e.add("from", arr(from));
             e.add("to", arr(to));
             if (rotation != null) e.add("rotation", rotation);
+            if (c.flash) e.addProperty("shade", false);   // glows evenly, like the generated flash
             JsonObject faces = new JsonObject();
             for (String f : new String[]{"north", "south", "east", "west", "up", "down"}) {
                 if (!cfaces.has(f)) continue;
@@ -1021,7 +1067,7 @@ public final class PackGenerator {
             elements.add(e);
         }
         JsonObject tex = textures;
-        if (flashAt != null) {
+        if (flashAt != null && !modelHasFlash) {   // no flash modelled in the .bbmodel: add the generated one
             tex = textures.deepCopy();
             tex.addProperty("flash", NS + ":item/muzzle_flash");
             double sz = plugin.getConfig().getDouble("flash.size", 3.0) / 2;

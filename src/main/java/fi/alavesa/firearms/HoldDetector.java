@@ -128,7 +128,12 @@ public final class HoldDetector {
         if (blockHit != null && blockHit.getHitBlock() != null) {
             double bd = blockHit.getHitPosition().distance(eyeV);
             if (bd < limit) {
-                if (blockHit.getHitBlock().getType().getHardness() == 0f) limit = bd - 0.3;   // insta-break: fake in front
+                if (blockHit.getHitBlock().getType().getHardness() == 0f) {
+                    // insta-break block (grass, flowers...): the fake goes just in front of it - but never close to the
+                    // face: walking through a grass field would otherwise put a barrier right at your nose.
+                    limit = bd - 0.3;
+                    if (limit < plugin.getConfig().getDouble("hold.min-distance", 3.0)) return null;
+                }
                 else { limit = bd; need = false; }                                            // the client mines THAT
             }
         }

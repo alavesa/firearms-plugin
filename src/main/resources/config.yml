@@ -19,6 +19,7 @@ hold:
   reach-bonus: 6.0       # extra block reach while an AUTO gun is held so the barrier is reachable
   lead: 3.0              # fast camera turns: also show the cluster where the crosshair is heading
   linger-ticks: 3        # keep cells this long after the crosshair leaves them
+  min-distance: 3.0      # a BLOCK never makes the barrier appear nearer than this (grass fields); entities may (1.2)
   mining-fatigue: true   # hidden Mining Fatigue III while any gun is held (no cracks, no breaking)
   no-dip: true           # huge attack_speed while a gun is held, so the gun never dips below the screen after a click
 
@@ -133,8 +134,16 @@ accuracy:
 
 # ---- First-person animations (frames generated from .bbmodel animations by /firearms pack) ----
 anim:
-  frame-ticks: 1
-  max-frames: 40         # cap per clip (longer animations get coarser frames) - keeps the pack small
+  frame-ticks: 1         # auto frame spacing when an animation has no Blockbench snapping and no explicit frames
+  max-frames: 40         # cap per clip (per gun: guns.yml anim.max-frames)
+  # Which animation NAMES in the .bbmodel mean which clip (exact name first, then "contains"). Add your own words,
+  # e.g. "rel" for reload. Per gun: guns.yml anim-names: with the same layout.
+  names:
+    fire:    [fire, shoot, shot, recoil]
+    reload:  [reload, rel, mag]
+    equip:   [equip, draw, deploy, pull, ready]
+    pump:    [pump, rack, cock, bolt, cycle]
+    inspect: [inspect, look, check, idle]
   # If the baked whole-gun (root bone) motion comes out mirrored in first person, flip the sign per axis here.
   root-rotation-sign: [1, 1, 1]
   root-position-sign: [1, 1, 1]

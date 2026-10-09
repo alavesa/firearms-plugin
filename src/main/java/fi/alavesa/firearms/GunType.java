@@ -34,6 +34,8 @@ public record GunType(
     org.bukkit.configuration.ConfigurationSection arms,     // per-gun first-person arms override (guns.yml arms:)
     double dropStart,       // blocks the bullet flies dead straight before gravity starts to arch it
     double drop,            // per-tick downward velocity gain once arching (severity of the arch)
+    org.bukkit.configuration.ConfigurationSection animNames, // per-gun animation-name keywords (guns.yml anim-names:)
+    org.bukkit.configuration.ConfigurationSection animCfg,   // per-gun clip settings: anim.<clip>.frames, anim.max-frames
     double equipSeconds     // draw time: the equip clip is stretched/compressed to this and the gun can't fire meanwhile (0 = clip length / 0.5 s)
 ) {
     public long shotIntervalMs() { return fireRate <= 0 ? 1000 : Math.round(1000.0 / fireRate); }

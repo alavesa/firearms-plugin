@@ -17,6 +17,11 @@
 #  drop-start     blocks the bullet flies DEAD STRAIGHT (default 3 x hitscan-range); after that it arches down
 #  drop           severity of the arch: downward velocity gained per tick once arching (default config projectile-gravity)
 #  INSPECT        an animation named "inspect" in the .bbmodel plays on F when the gun is full or you have nothing to load
+#  anim-names     per-gun animation name keywords, e.g.  anim-names: { reload: [rel, r], fire: [bang] }
+#  anim           per-gun clip settings:  anim: { max-frames: 30, reload: { frames: 12 }, fire: { frames: 4 } }
+#                 (frames default = the animation's own Blockbench snapping x length, else length x 20)
+#  FLASH          a cube or group named "flash" / "muzzle_flash" in the .bbmodel IS the muzzle flash: hidden normally,
+#                 shown on the fire frames with its own texture (no generated flash then)
 #  accuracy       hip-fire spread in degrees (0 = laser)
 #  aim-accuracy   spread while sneaking
 #  recoil         vertical camera kick per shot in degrees

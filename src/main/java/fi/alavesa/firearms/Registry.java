@@ -128,6 +128,8 @@ public final class Registry {
                 s.getConfigurationSection("arms"),
                 s.getDouble("drop-start", s.getDouble("hitscan-range", 10.0) * 3),
                 s.getDouble("drop", plugin.getConfig().getDouble("ballistics.projectile-gravity", 0.03)),
+                s.getConfigurationSection("anim-names"),
+                s.getConfigurationSection("anim"),
                 s.getDouble("equip-seconds", 0)));
         }
         // Animation frame index written by the pack generator.
