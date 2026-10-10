@@ -86,12 +86,25 @@ arms:
   right: { enabled: true,  pos: [10.5, 1, 11.5], rotation: [-45, 0, 0] }
   left:  { enabled: false, pos: [5.5, 3, 4],      rotation: [-45, 0, 22.5] }
 
+# ---- Stat sheet in the gun's description (0-10 bars; 10 = these maxima) ----
+stats:
+  max:
+    damage: 20       # damage x pellets per trigger pull
+    fire-rate: 15    # rounds per second
+    spread: 6        # hip-fire spread in degrees (accuracy bar = 10 at 0 deg, 0 at this value)
+    recoil: 8        # vertical kick in degrees
+    range: 160       # blocks
+
 # ---- GUI icons ----
 # In the inventory a gun shows a flat label card ("RIFLE", "SMG"...) instead of the 3D model - Roblox style. Draw your
 # own as models/<model>_icon.png (any size) or let the generator render the gun's name. accent = the bar colour.
 icons:
   enabled: true
   accent: "E8A33D"
+
+# ---- Grenades ----
+grenades:
+  smoke-density: 28      # particles per tick in a smoke cloud (higher = less see-through, more client load)
 
 # ---- Craters (bullet holes) ----
 craters:
@@ -142,6 +155,9 @@ accuracy:
 
 # ---- First-person animations (frames generated from .bbmodel animations by /firearms pack) ----
 anim:
+  # composite (default): every animated group is its own sub-model with an EXACT display transform per frame -
+  #   no 22.5 degree rounding at all. baked: the older single-model mode (rotations rounded to 22.5 steps).
+  mode: composite
   frame-ticks: 1         # auto frame spacing when an animation has no Blockbench snapping and no explicit frames
   max-frames: 40         # cap per clip (per gun: guns.yml anim.max-frames)
   # Which animation NAMES in the .bbmodel mean which clip (exact name first, then "contains"). Add your own words,

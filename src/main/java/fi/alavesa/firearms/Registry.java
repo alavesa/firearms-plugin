@@ -215,6 +215,17 @@ public final class Registry {
         return item;
     }
 
+    /** "Damage  ███████░░░ 7.0" - value is a 0..1 fraction of the configured maximum. */
+    private static Component stat(String label, double frac, NamedTextColor color) {
+        double v = Math.max(0, Math.min(10, Math.round(frac * 100) / 10.0));
+        int filled = (int) Math.round(v);
+        String bar = "█".repeat(filled) + "░".repeat(10 - filled);
+        String padded = (label + "          ").substring(0, 10);
+        return Component.text(padded, NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false)
+            .append(Component.text(bar + " ", color))
+            .append(Component.text(String.format(java.util.Locale.ROOT, "%.1f", v), NamedTextColor.WHITE));
+    }
+
     private static String trim(double d) { return d == Math.rint(d) ? String.valueOf((long) d) : String.valueOf(d); }
 
     public ArmorType vestOf(ItemStack it) {
@@ -261,8 +272,7 @@ public final class Registry {
         ItemMeta meta = item.getItemMeta();
         meta.displayName(name(g.name()));
         meta.lore(List.of(
-            Component.text("Right-click: pull the pin" + (g.cook() ? " (fuse " + trim(g.fuse()) + " s starts!)" : ""), NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false),
-            Component.text("Left-click: throw", NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false)));
+            Component.text("Left-click: pull the pin and throw" + (g.cook() ? " (" + trim(g.fuse()) + " s fuse)" : ""), NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false)));
         setModel(meta, g.model());
         meta.setMaxStackSize(16);
         meta.getPersistentDataContainer().set(grenadeKey, PersistentDataType.STRING, g.id());
@@ -367,10 +377,20 @@ public final class Registry {
         ItemStack item = new ItemStack(base());
         ItemMeta meta = item.getItemMeta();
         meta.displayName(name(gun.name()));
-        meta.lore(List.of(
-            Component.text(gun.switchable() ? "SEMI / AUTO - right-click to switch" : gun.auto() ? "AUTO - hold left-click" : "SEMI - one shot per click", NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false),
-            Component.text(gun.usesMag() ? "Magazine: " + gun.magId() : "Loads " + gun.ammoId() + " one by one", NamedTextColor.DARK_GRAY).decoration(TextDecoration.ITALIC, false),
-            Component.text("F = reload", NamedTextColor.DARK_GRAY).decoration(TextDecoration.ITALIC, false)));
+        List<Component> lore = new ArrayList<>();
+        lore.add(Component.text(gun.switchable() ? "SEMI / AUTO - right-click to switch" : gun.auto() ? "AUTO - hold left-click" : "SEMI - one shot per click", NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false));
+        lore.add(Component.text(gun.usesMag() ? "Magazine: " + gun.magId() : "Loads " + gun.ammoId() + " one by one", NamedTextColor.DARK_GRAY).decoration(TextDecoration.ITALIC, false));
+        // Stat sheet on a 0-10 scale (10 = the configured maximum, config stats.max.*), so guns are comparable at a glance.
+        ConfigurationSection mx = plugin.getConfig().getConfigurationSection("stats.max");
+        double mDmg = mx == null ? 20 : mx.getDouble("damage", 20), mRate = mx == null ? 15 : mx.getDouble("fire-rate", 15), mRec = mx == null ? 8 : mx.getDouble("recoil", 8),
+               mSpread = mx == null ? 6 : mx.getDouble("spread", 6), mRange = mx == null ? 160 : mx.getDouble("range", 160);
+        lore.add(stat("Damage", gun.damage() * gun.pellets() / mDmg, NamedTextColor.RED));
+        lore.add(stat("Fire rate", gun.fireRate() / mRate, NamedTextColor.GOLD));
+        lore.add(stat("Accuracy", 1 - Math.min(1, gun.accuracy() / mSpread), NamedTextColor.GREEN));
+        lore.add(stat("Recoil", gun.recoil() / mRec, NamedTextColor.LIGHT_PURPLE));
+        lore.add(stat("Range", gun.range() / mRange, NamedTextColor.AQUA));
+        lore.add(Component.text("F = reload", NamedTextColor.DARK_GRAY).decoration(TextDecoration.ITALIC, false));
+        meta.lore(lore);
         setModel(meta, gun.model());
         var pdc = meta.getPersistentDataContainer();
         pdc.set(gunKey, PersistentDataType.STRING, gun.id());

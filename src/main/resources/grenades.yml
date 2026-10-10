@@ -1,7 +1,7 @@
-# Grenades. RIGHT-click = pull the pin ("unpin" animation), LEFT-click = throw ("throw" animation).
+# Grenades. LEFT-click throws: the "unpin" animation plays, then "throw", then the grenade leaves the hand.
 #  kind      frag | incendiary | smoke
-#  fuse      seconds until the effect. cook: true = the fuse starts when the pin is pulled (hold it too long...),
-#            cook: false = the fuse starts when thrown
+#  fuse      seconds until the effect. cook: true = the fuse starts at the pin pull (the animations eat into it),
+#            cook: false = the fuse starts when the grenade leaves the hand
 #  radius    effect radius (blocks)
 #  damage    frag only: damage at the centre in half-hearts, linear falloff to the edge; walls shield
 #  duration  incendiary: seconds the ground burns; smoke: seconds the cloud lasts

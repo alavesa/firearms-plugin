@@ -65,6 +65,8 @@ public final class PackGenerator {
     private final Map<String, String[]> handVariant = new LinkedHashMap<>();    // cmd string -> [classic path, slim path] (hands modelled in the .bbmodel)
     private final Map<String, int[]> handTints = new LinkedHashMap<>();         // cmd string -> [classic tint count, slim tint count]
     private final Map<String, String[]> skinOrder = new LinkedHashMap<>();      // model -> ["u,v;u,v;...", slim list]
+    /** composite mode: cmd string -> parts per variant (0 plain, 1 classic hands, 2 slim hands); a part = [path, tint list]. */
+    private final Map<String, List<List<Object[]>>> compositeParts = new LinkedHashMap<>();
     private final Map<String, List<String>> soundEvents = new LinkedHashMap<>();// sound event -> files
     private GunType currentGun;
     private final List<String> report = new ArrayList<>();
@@ -205,6 +207,41 @@ public final class PackGenerator {
             m.addProperty("model", NS + ":item/" + e.getValue());
             String fp = fpVariant.get(e.getKey());
             String icon = iconOf.get(e.getKey());
+            List<List<Object[]>> cp = compositeParts.get(e.getKey());
+            if (cp != null) {
+                JsonObject plainM = compositeJson(cp.get(0));
+                JsonObject sel = new JsonObject();
+                sel.addProperty("type", "minecraft:select");
+                sel.addProperty("property", "minecraft:display_context");
+                JsonArray sc = new JsonArray();
+                boolean handsHere = cp.get(1) != cp.get(0);
+                if (handsHere) {
+                    JsonObject fpm;
+                    if (cp.get(2) != cp.get(1)) {
+                        fpm = new JsonObject();
+                        fpm.addProperty("type", "minecraft:condition");
+                        fpm.addProperty("property", "minecraft:custom_model_data");
+                        fpm.addProperty("index", 0);
+                        fpm.add("on_true", compositeJson(cp.get(2)));
+                        fpm.add("on_false", compositeJson(cp.get(1)));
+                    } else fpm = compositeJson(cp.get(1));
+                    JsonObject fpCase = new JsonObject();
+                    JsonArray when = new JsonArray(); when.add("firstperson_righthand"); when.add("firstperson_lefthand");
+                    fpCase.add("when", when); fpCase.add("model", fpm); sc.add(fpCase);
+                }
+                if (icon != null && files.containsKey("assets/" + NS + "/models/item/" + icon + ".json")) {
+                    JsonObject gc = new JsonObject(); gc.addProperty("when", "gui");
+                    JsonObject im = new JsonObject(); im.addProperty("type", "minecraft:model"); im.addProperty("model", NS + ":item/" + icon);
+                    gc.add("model", im); sc.add(gc);
+                }
+                JsonObject modelEntry;
+                if (sc.isEmpty()) modelEntry = plainM;
+                else { sel.add("cases", sc); sel.add("fallback", plainM); modelEntry = sel; }
+                c.add("model", modelEntry);
+                report.add(base + ": \"" + e.getKey() + "\" -> composite of " + cp.get(0).size() + " part(s)" + (handsHere ? " + hands" : "") + (icon != null ? ", gui icon" : ""));
+                cases.add(c);
+                continue;
+            }
             String[] hv = handVariant.get(e.getKey());
             if (hv != null && files.containsKey("assets/" + NS + "/models/item/" + hv[0] + ".json")) {
                 int[] ht = handTints.getOrDefault(e.getKey(), new int[]{0, 0});
@@ -324,6 +361,27 @@ public final class PackGenerator {
         // so the gun stays on screen and the baked fire/reload frames are actually visible.
         if (noSwapAnimation) root.addProperty("hand_animation_on_swap", false);
         put("assets/minecraft/items/" + base + ".json", GSON.toJson(root));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static JsonObject compositeJson(List<Object[]> parts) {
+        JsonObject comp = new JsonObject();
+        comp.addProperty("type", "minecraft:composite");
+        JsonArray models = new JsonArray();
+        for (Object[] part : parts) {
+            JsonObject m = new JsonObject();
+            m.addProperty("type", "minecraft:model");
+            m.addProperty("model", NS + ":item/" + part[0]);
+            List<Integer> tints = (List<Integer>) part[1];
+            if (!tints.isEmpty()) {
+                JsonArray ta = new JsonArray();
+                for (int g : tints) { JsonObject t = new JsonObject(); t.addProperty("type", "minecraft:custom_model_data"); t.addProperty("index", g); t.addProperty("default", 0xC58C5E); ta.add(t); }
+                m.add("tints", ta);
+            }
+            models.add(m);
+        }
+        comp.add("models", models);
+        return comp;
     }
 
     private static JsonObject tinted(String path, int n) {
@@ -846,12 +904,20 @@ public final class PackGenerator {
         double[] flashAt = flashSpot(name, cubes);
 
         // --- rest model
-        JsonObject rest = bake(name, cubesPlain, bones, null, textures, texIndex, texRes, display, null, 0, S, null);
-        put("assets/" + NS + "/models/item/" + mpath + ".json", GSON.toJson(rest));
-        cmdToModel.put(name, mpath);
-        boolean arms = currentGun != null && registry.armsEnabled(currentGun) && !handsOn;
-        if (arms) armsVariant(name, mpath, rest);
-        if (handsOn) handVariants(name, mpath, cubesC, cubesS, slimOn, bones, null, textures, texIndex, texRes, display, null, 0, S, null);
+        boolean composite = !plugin.getConfig().getString("anim.mode", "composite").equalsIgnoreCase("baked");
+        CompositeModel comp = composite ? new CompositeModel(name, mpath, cubes, cubesC, cubesS, bones, textures, display, texIndex, texRes, S, flashAt, handsOn, slimOn) : null;
+        boolean arms = currentGun != null && registry.armsEnabled(currentGun) && !handsOn && !composite;
+        if (composite) {
+            comp.emit(name, mpath, null, 0, false);
+            cmdToModel.put(name, mpath + "__b0");   // a real model path is still needed for the report / validation
+            report.add(name + ": composite mode - " + comp.partCount() + " part(s), bone rotations exact (no 22.5 steps)");
+        } else {
+            JsonObject rest = bake(name, cubesPlain, bones, null, textures, texIndex, texRes, display, null, 0, S, null);
+            put("assets/" + NS + "/models/item/" + mpath + ".json", GSON.toJson(rest));
+            cmdToModel.put(name, mpath);
+            if (arms) armsVariant(name, mpath, rest);
+            if (handsOn) handVariants(name, mpath, cubesC, cubesS, slimOn, bones, null, textures, texIndex, texRes, display, null, 0, S, null);
+        }
 
         // --- animations -> frames
         int frameTicks = Math.max(1, plugin.getConfig().getInt("anim.frame-ticks", 1));
@@ -909,13 +975,18 @@ public final class PackGenerator {
             for (int i = 1; i <= n; i++) {
                 double t = n == 1 ? clip.length : (i - 1) * (clip.length / (n - 1));
                 boolean flashFrame = key.equals("fire") && i <= Math.max(0, plugin.getConfig().getInt("flash.frames", 1));
-                Bone rb = pickRoot(topBones, clip);
-                JsonObject frame = bake(name, cubesPlain, bones, rb, textures, texIndex, texRes, display, clip, t, S, flashFrame ? flashAt : null);
                 String fname = name + "_" + key + "_" + i;
-                put("assets/" + NS + "/models/item/" + mpath + "_" + key + "_" + i + ".json", GSON.toJson(frame));
-                cmdToModel.put(fname, mpath + "_" + key + "_" + i);
-                if (arms) armsVariant(fname, mpath + "_" + key + "_" + i, frame);
-                if (handsOn) handVariants(fname, mpath + "_" + key + "_" + i, cubesC, cubesS, slimOn, bones, rb, textures, texIndex, texRes, display, clip, t, S, flashFrame ? flashAt : null);
+                if (composite) {
+                    comp.emit(fname, mpath + "_" + key + "_" + i, clip, t, flashFrame);
+                    cmdToModel.put(fname, mpath + "_" + key + "_" + i + "__b0");
+                } else {
+                    Bone rb = pickRoot(topBones, clip);
+                    JsonObject frame = bake(name, cubesPlain, bones, rb, textures, texIndex, texRes, display, clip, t, S, flashFrame ? flashAt : null);
+                    put("assets/" + NS + "/models/item/" + mpath + "_" + key + "_" + i + ".json", GSON.toJson(frame));
+                    cmdToModel.put(fname, mpath + "_" + key + "_" + i);
+                    if (arms) armsVariant(fname, mpath + "_" + key + "_" + i, frame);
+                    if (handsOn) handVariants(fname, mpath + "_" + key + "_" + i, cubesC, cubesS, slimOn, bones, rb, textures, texIndex, texRes, display, clip, t, S, flashFrame ? flashAt : null);
+                }
                 frames++;
             }
             clips.put(key, new int[]{n, clipTicks});
@@ -1344,6 +1415,216 @@ public final class PackGenerator {
     }
 
     private static double clamp80(double v) { return Math.max(-80, Math.min(80, v)); }
+
+    // =====================================================================================================
+    // COMPOSITE MODE: every bone that owns cubes becomes its own sub-model whose geometry is written ONCE in
+    // bone-local coordinates (pivot moved to the model centre). Each frame then only writes a tiny wrapper per
+    // part ({"parent": geometry, "display": {...}}) whose display transform carries the bone's EXACT world
+    // rotation/translation for that frame (display rotations are free floats - no 22.5 degree steps), composed
+    // with the gun's own display settings. The items file shows the frame as a minecraft:composite of the parts.
+    // =====================================================================================================
+    private static final String[] CTX = {"firstperson_righthand", "firstperson_lefthand", "thirdperson_righthand", "thirdperson_lefthand", "gui", "ground", "fixed", "head"};
+
+    private final class CompositeModel {
+        final String name, mpath;
+        final Map<String, Bone> bones;
+        final JsonObject textures, display;
+        final Map<String, Integer> texIndex; final List<double[]> texRes;
+        final double scale; final double[] flashAt; final boolean hands, slim;
+        final Bone root = new Bone();                        // virtual bone for cubes outside any group
+        final List<Part> parts = new ArrayList<>();
+
+        final class Part {
+            Bone bone; String suffix; int variant;           // 0 plain, 1 classic hand, 2 slim hand, 3 flash (model), 4 generated flash
+            List<Cube> cubes = new ArrayList<>(); double k = 1; List<Integer> tints = new ArrayList<>(); boolean written;
+            String geomPath() { return mpath + "__g" + suffix; }   // geometry; wrappers use "__b" (rest pose included)
+        }
+
+        CompositeModel(String name, String mpath, Map<String, Cube> all, Map<String, Cube> classic, Map<String, Cube> slimCubes, Map<String, Bone> bones,
+                       JsonObject textures, JsonObject display, Map<String, Integer> texIndex, List<double[]> texRes, double scale, double[] flashAt, boolean hands, boolean slim) {
+            this.name = name; this.mpath = mpath; this.bones = bones; this.textures = textures; this.display = display;
+            this.texIndex = texIndex; this.texRes = texRes; this.scale = scale; this.flashAt = flashAt; this.hands = hands; this.slim = slim;
+            root.name = "root"; root.uuid = "__root"; root.origin = new double[]{8, 8, 8};
+            // group cubes by bone and kind
+            Map<Bone, Part[]> byBone = new LinkedHashMap<>();
+            java.util.function.BiConsumer<Cube, Integer> add = (c, variant) -> {
+                Bone b = c.bone == null ? root : c.bone;
+                Part[] arr = byBone.computeIfAbsent(b, x -> new Part[4]);
+                if (arr[variant] == null) { arr[variant] = new Part(); arr[variant].bone = b; arr[variant].variant = variant; }
+                arr[variant].cubes.add(c);
+                if (c.tint >= 0) arr[variant].tints.add(c.tint);
+            };
+            for (Cube c : all.values()) if (c.tint < 0) add.accept(c, c.flash ? 3 : 0);      // plain cubes (+ model flash)
+            if (hands) {
+                for (Cube c : classic.values()) if (c.tint >= 0) add.accept(c, 1);
+                if (slim) for (Cube c : slimCubes.values()) if (c.tint >= 0) add.accept(c, 2);
+            }
+            int bi = 0;
+            for (var e : byBone.entrySet()) {
+                for (Part part : e.getValue()) if (part != null) { part.suffix = bi + (part.variant == 1 ? "h" : part.variant == 2 ? "s" : part.variant == 3 ? "f" : ""); parts.add(part); }
+                bi++;
+            }
+            if (flashAt != null && parts.stream().noneMatch(pt -> pt.variant == 3)) {   // generated flash cube as its own part
+                Part fp = new Part(); fp.bone = root; fp.variant = 4; fp.suffix = "flash";
+                Cube fc = new Cube(); fc.uuid = "__flash"; fc.name = "flash"; fc.flash = true;
+                double sz = plugin.getConfig().getDouble("flash.size", 2.5) / 2;
+                fc.from = new double[]{flashAt[0] - sz, flashAt[1] - sz, flashAt[2] - sz * 1.6}; fc.to = new double[]{flashAt[0] + sz, flashAt[1] + sz, flashAt[2] + sz * 1.6};
+                fc.origin = new double[]{flashAt[0], flashAt[1], flashAt[2]};
+                fc.faces = new JsonObject();
+                for (String f : FACE) { JsonObject face = new JsonObject(); face.add("uv", arr(0, 0, 16, 16)); face.addProperty("texture", "#flash"); fc.faces.add(f, face); }
+                fp.cubes.add(fc); parts.add(fp);
+            }
+        }
+
+        int partCount() { return parts.size(); }
+
+        /** Write the per-bone geometry once (bone-local, pivot at the centre, fitted into the Java range). */
+        private void writeGeometry(Part part) {
+            if (part.written) return;
+            part.written = true;
+            Bone b = part.bone;
+            double[] shift = {8 - b.origin[0], 8 - b.origin[1], 8 - b.origin[2]};
+            // extents after the shift -> fit factor k around the centre
+            double far = 0;
+            for (Cube c : part.cubes) for (int i = 0; i < 3; i++) {
+                far = Math.max(far, Math.abs(c.from[i] - c.inflate + shift[i] - 8));
+                far = Math.max(far, Math.abs(c.to[i] + c.inflate + shift[i] - 8));
+            }
+            part.k = far > 23.9 ? 23.9 / far : 1.0;
+            JsonArray elements = new JsonArray();
+            int localTint = 0;
+            for (Cube c : part.cubes) {
+                double[][] Re = rot3(c.rotation);
+                int[][] Pe = nearestPerm(Re);
+                double[] eulE = euler3(mul3(transpose3(Pe), Re));
+                int ca = 0;
+                for (int i = 1; i < 3; i++) if (Math.abs(eulE[i]) > Math.abs(eulE[ca])) ca = i;
+                double cs = Math.max(-45, Math.min(45, Math.round(eulE[ca] / 22.5) * 22.5));
+                double[] lo = {1e9, 1e9, 1e9}, hi = {-1e9, -1e9, -1e9};
+                for (int corner = 0; corner < 8; corner++) {
+                    double[] v = { ((corner & 1) == 0 ? c.from[0] - c.inflate : c.to[0] + c.inflate) - c.origin[0],
+                                   ((corner & 2) == 0 ? c.from[1] - c.inflate : c.to[1] + c.inflate) - c.origin[1],
+                                   ((corner & 4) == 0 ? c.from[2] - c.inflate : c.to[2] + c.inflate) - c.origin[2] };
+                    double[] w = { Pe[0][0]*v[0]+Pe[0][1]*v[1]+Pe[0][2]*v[2] + c.origin[0], Pe[1][0]*v[0]+Pe[1][1]*v[1]+Pe[1][2]*v[2] + c.origin[1], Pe[2][0]*v[0]+Pe[2][1]*v[1]+Pe[2][2]*v[2] + c.origin[2] };
+                    for (int i = 0; i < 3; i++) { double q = 8 + (w[i] + shift[i] - 8) * part.k; lo[i] = Math.min(lo[i], q); hi[i] = Math.max(hi[i], q); }
+                }
+                JsonObject e = new JsonObject();
+                e.add("from", arr(lo));
+                e.add("to", arr(hi));
+                if (cs != 0) {
+                    JsonObject rotation = new JsonObject();
+                    rotation.add("origin", arr(8 + (c.origin[0] + shift[0] - 8) * part.k, 8 + (c.origin[1] + shift[1] - 8) * part.k, 8 + (c.origin[2] + shift[2] - 8) * part.k));
+                    rotation.addProperty("axis", ca == 0 ? "x" : ca == 1 ? "y" : "z");
+                    rotation.addProperty("angle", cs);
+                    e.add("rotation", rotation);
+                }
+                if (c.flash) e.addProperty("shade", false);
+                JsonObject cfaces = remapFaces(c.faces, Pe);
+                JsonObject faces = new JsonObject();
+                for (String f : FACE) {
+                    if (!cfaces.has(f)) continue;
+                    JsonObject bf = cfaces.getAsJsonObject(f);
+                    JsonObject face = new JsonObject();
+                    if (c.tint >= 0) {
+                        face.add("uv", arr(0, 0, 16, 16));
+                        face.addProperty("texture", "#skin");
+                        face.addProperty("tintindex", localTint++);
+                    } else if (part.variant == 4) {
+                        face.add("uv", arr(0, 0, 16, 16));
+                        face.addProperty("texture", "#flash");
+                    } else {
+                        Integer idx = texIdx(bf, texIndex);
+                        if (idx == null) idx = 0;
+                        double[] res = idx < texRes.size() ? texRes.get(idx) : new double[]{16, 16};
+                        double[] uv = bf.has("uv") ? vec4(bf.get("uv")) : new double[]{0, 0, res[0], res[1]};
+                        face.add("uv", arr(uv[0] * 16 / res[0], uv[1] * 16 / res[1], uv[2] * 16 / res[0], uv[3] * 16 / res[1]));
+                        face.addProperty("texture", "#" + idx);
+                        if (bf.has("rotation")) face.addProperty("rotation", (int) num(bf.get("rotation"), 0));
+                    }
+                    faces.add(f, face);
+                }
+                e.add("faces", faces);
+                elements.add(e);
+            }
+            JsonObject model = new JsonObject();
+            JsonObject tex = textures.deepCopy();
+            if (part.variant == 4) tex.addProperty("flash", NS + ":item/muzzle_flash");
+            model.add("textures", tex);
+            model.add("elements", elements);
+            put("assets/" + NS + "/models/item/" + part.geomPath() + ".json", GSON.toJson(model));
+        }
+
+        /** Exact world matrix of a bone at this frame (rest + animation, full chain, no snapping). */
+        private double[][] world(Bone b, Clip clip, double t, Map<Bone, double[][]> cache) {
+            if (b == root) return identity();
+            double[][] w = cache.get(b);
+            if (w != null) return w;
+            double[] r = b.rotation.clone(), p = {0, 0, 0};
+            if (clip != null) {
+                double[] ar = sample(clip.rot.get(b.uuid), t), ap = sample(clip.pos.get(b.uuid), t);
+                for (int i = 0; i < 3; i++) { r[i] += ar[i]; p[i] += ap[i] * scale; }
+            }
+            double[][] local = mul(mul(translate(b.origin[0] + p[0], b.origin[1] + p[1], b.origin[2] + p[2]), rotZYX(r)), translate(-b.origin[0], -b.origin[1], -b.origin[2]));
+            w = b.parent == null ? local : mul(world(b.parent, clip, t, cache), local);
+            cache.put(b, w);
+            return w;
+        }
+
+        /** Emit one pose (rest when clip == null, else the clip at time t): wrappers per part + composite lists. */
+        void emit(String cmd, String framePath, Clip clip, double t, boolean flashFrame) {
+            Map<Bone, double[][]> cache = new HashMap<>();
+            List<Object[]> plain = new ArrayList<>(), classic = new ArrayList<>(), slimL = new ArrayList<>();
+            for (Part part : parts) {
+                if ((part.variant == 3 || part.variant == 4) && !flashFrame) continue;
+                writeGeometry(part);
+                double[][] M = world(part.bone, clip, t, cache);
+                double[] Pw = apply(M, part.bone.origin);
+                double[][] Rw = {{M[0][0], M[0][1], M[0][2]}, {M[1][0], M[1][1], M[1][2]}, {M[2][0], M[2][1], M[2][2]}};
+                JsonObject disp = new JsonObject();
+                for (String ctx : CTX) {
+                    JsonObject base = display.has(ctx) ? display.getAsJsonObject(ctx) : null;
+                    double[] br = base != null ? vec(base.get("rotation")) : new double[]{0, 0, 0};
+                    double[] bt = base != null ? vec(base.get("translation")) : new double[]{0, 0, 0};
+                    double[] bs = base != null ? vec(base.get("scale")) : new double[]{1, 1, 1};
+                    double[][] Rd = rotXYZ(br);
+                    double[] eul = eulerXYZ(mul3(Rd, Rw));
+                    double m = (bs[0] + bs[1] + bs[2]) / 3;
+                    double[] off = { Pw[0] - 8, Pw[1] - 8, Pw[2] - 8 };
+                    double[] ro = { Rd[0][0]*off[0]+Rd[0][1]*off[1]+Rd[0][2]*off[2], Rd[1][0]*off[0]+Rd[1][1]*off[1]+Rd[1][2]*off[2], Rd[2][0]*off[0]+Rd[2][1]*off[1]+Rd[2][2]*off[2] };
+                    disp.add(ctx, transform(eul,
+                        new double[]{ clamp80(bt[0] + m * ro[0]), clamp80(bt[1] + m * ro[1]), clamp80(bt[2] + m * ro[2]) },
+                        new double[]{ Math.min(4, bs[0] / part.k), Math.min(4, bs[1] / part.k), Math.min(4, bs[2] / part.k) }));
+                }
+                String wrapPath = framePath + "__b" + part.suffix;
+                JsonObject wrap = new JsonObject();
+                wrap.addProperty("parent", NS + ":item/" + part.geomPath());
+                wrap.add("display", disp);
+                put("assets/" + NS + "/models/item/" + wrapPath + ".json", GSON.toJson(wrap));
+                Object[] entry = { wrapPath, part.tints };
+                if (part.variant == 1) classic.add(entry);
+                else if (part.variant == 2) slimL.add(entry);
+                else plain.add(entry);
+            }
+            List<Object[]> cl = new ArrayList<>(plain); cl.addAll(classic);
+            List<Object[]> sl = new ArrayList<>(plain); sl.addAll(slim ? slimL : classic);
+            compositeParts.put(cmd, List.of(plain, hands ? cl : plain, hands ? sl : plain));
+        }
+    }
+
+    private static double[][] rotXYZ(double[] deg) {
+        double x = Math.toRadians(deg[0]), y = Math.toRadians(deg[1]), z = Math.toRadians(deg[2]);
+        double[][] rx = {{1,0,0},{0,Math.cos(x),-Math.sin(x)},{0,Math.sin(x),Math.cos(x)}};
+        double[][] ry = {{Math.cos(y),0,Math.sin(y)},{0,1,0},{-Math.sin(y),0,Math.cos(y)}};
+        double[][] rz = {{Math.cos(z),-Math.sin(z),0},{Math.sin(z),Math.cos(z),0},{0,0,1}};
+        return mul3(mul3(rx, ry), rz);
+    }
+    /** Euler angles (deg) such that rotXYZ(e) == M, i.e. what Minecraft's display "rotation" expects. */
+    private static double[] eulerXYZ(double[][] m) {
+        double y = Math.asin(Math.max(-1, Math.min(1, m[0][2])));
+        double x = Math.atan2(-m[1][2], m[2][2]);
+        double z = Math.atan2(-m[0][1], m[0][0]);
+        return new double[]{ Math.toDegrees(x), Math.toDegrees(y), Math.toDegrees(z) };
+    }
 
     private static JsonObject displayFrom(JsonObject bbDisplay, double comp) {
         JsonObject d = defaultDisplay(comp);

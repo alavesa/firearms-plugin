@@ -1,4 +1,5 @@
-# Guns. Every gun is ONE fixed fire mode: semi or auto.
+# Guns. The description of every gun shows a 0-10 stat sheet (damage, fire rate, accuracy, recoil, range) scaled to
+# config.yml stats.max - keep the guns spread out on those scales so they feel different.
 #  model          custom_model_data string = the .bbmodel file name in plugins/Firearms/models (without .bbmodel)
 #  weight         kg - walk-speed penalty while held (config weight.speed-per-kg)
 #  fire-mode      semi | auto | "semi,auto" (right-click switches; the first one listed is the default)
@@ -49,8 +50,8 @@ guns:
     model: pistol
     weight: 0.9
     fire-mode: semi
-    fire-rate: 6
-    damage: 4.0
+    fire-rate: 5
+    damage: 5.0
     magazine: 15
     mag: mag_9mm
     reload-seconds: 1.4
@@ -59,7 +60,7 @@ guns:
     speed: 4.0
     accuracy: 1.2
     aim-accuracy: 0.4
-    recoil: 2.0
+    recoil: 2.5
     h-recoil: 0.8
     falloff-min: 0.4
     sound: "minecraft:block.anvil.land"
@@ -71,8 +72,8 @@ guns:
     model: smg
     weight: 2.5
     fire-mode: auto
-    fire-rate: 11
-    damage: 3.0
+    fire-rate: 13
+    damage: 2.5
     magazine: 30
     mag: mag_9mm           # shares the pistol's magazine
     reload-seconds: 1.8
@@ -81,8 +82,8 @@ guns:
     speed: 4.0
     accuracy: 2.2
     aim-accuracy: 0.9
-    recoil: 1.2
-    h-recoil: 1.0
+    recoil: 1.5
+    h-recoil: 1.2
     falloff-min: 0.3
     sound: "minecraft:block.bamboo.hit"
     pitch: 1.9
@@ -91,8 +92,8 @@ guns:
     model: rifle
     weight: 3.6
     fire-mode: "semi,auto"   # right-click switches
-    fire-rate: 9
-    damage: 5.0
+    fire-rate: 8
+    damage: 6.0
     magazine: 30
     mag: mag_556
     reload-seconds: 2.2
@@ -101,8 +102,8 @@ guns:
     speed: 5.0
     accuracy: 1.6
     aim-accuracy: 0.5
-    recoil: 1.8
-    h-recoil: 0.9
+    recoil: 3.5
+    h-recoil: 1.0
     falloff-min: 0.5
     sound: "minecraft:entity.generic.explode"
     pitch: 1.9
@@ -124,7 +125,7 @@ guns:
     speed: 3.0
     accuracy: 5.0
     aim-accuracy: 3.5
-    recoil: 5.0
+    recoil: 7.0
     h-recoil: 1.5
     falloff-min: 0.15
     sound: "minecraft:entity.generic.explode"
@@ -144,7 +145,7 @@ guns:
     speed: 7.0
     accuracy: 3.0
     aim-accuracy: 0.05
-    recoil: 6.0
+    recoil: 8.0
     h-recoil: 0.5
     falloff-min: 0.7
     sound: "minecraft:entity.lightning_bolt.thunder"

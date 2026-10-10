@@ -79,26 +79,16 @@ public final class Grenades implements Listener {
         long now = System.currentTimeMillis();
         Long last = lastThrow.put(p.getUniqueId(), now);
         if (last != null && now - last < 300) return;   // one action per click (air + block both fire)
-        var meta = item.getItemMeta();
-        boolean armed = meta.getPersistentDataContainer().has(armedKey, PersistentDataType.BYTE);
-        if (right) {
-            if (armed) return;
-            meta.getPersistentDataContainer().set(armedKey, PersistentDataType.BYTE, (byte) 1);
-            meta.getPersistentDataContainer().set(armedAtKey, PersistentDataType.LONG, now);
-            item.setItemMeta(meta);
-            p.playSound(p.getLocation(), "minecraft:item.flintandsteel.use", 0.8f, 1.6f);
-            p.sendActionBar(Component.text(g.cook() ? "Pin pulled - " + g.fuse() + " s!" : "Pin pulled", NamedTextColor.YELLOW));
-            playClip(p, g, item, "unpin", null);
-            return;
-        }
-        // throw: play the throw clip, then launch and consume one
+        if (right) return;                               // right-click does nothing; LEFT does it all
+        if (clips.containsKey(p.getUniqueId())) return;   // already mid-throw
+        // LEFT-click: unpin clip, then throw clip, then the grenade leaves the hand. With cook: true the fuse
+        // starts at the pin pull, so the time the animations take is already burning.
+        int[] un = registry.anim(g.model(), "unpin"), th = registry.anim(g.model(), "throw");
+        int animTicks = (un == null ? 0 : un[0] * un[1]) + (th == null ? 0 : th[0] * th[1]);
         int fuseTicks = (int) Math.round(g.fuse() * 20);
-        if (armed && g.cook()) {
-            long armedAt = meta.getPersistentDataContainer().getOrDefault(armedAtKey, PersistentDataType.LONG, now);
-            fuseTicks = Math.max(1, fuseTicks - (int) ((now - armedAt) / 50));
-        }
-        final int fuse = fuseTicks;
-        playClip(p, g, item, "throw", () -> launch(p, g, fuse));
+        final int fuse = g.cook() ? Math.max(1, fuseTicks - animTicks) : fuseTicks;
+        p.playSound(p.getLocation(), "minecraft:item.flintandsteel.use", 0.8f, 1.6f);
+        playClip(p, g, item, "unpin", () -> playClip(p, g, item, "throw", () -> launch(p, g, fuse)));
     }
 
     private void launch(Player p, GrenadeType g, int fuseTicks) {
@@ -193,9 +183,17 @@ public final class Grenades implements Listener {
                         lit.add(b.getLocation());
                     }
                 }
-                plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
-                    for (Location l : lit) { if (l.getBlock().getType() == Material.FIRE) l.getBlock().setType(Material.AIR, false); tempFire.remove(l); }
-                }, burn);
+                // the fire dies down gradually: from 40% of the duration on, a few blocks go out at a time
+                java.util.Collections.shuffle(lit, ThreadLocalRandom.current());
+                int start = (int) (burn * 0.4), span = Math.max(1, burn - start);
+                for (int i = 0; i < lit.size(); i++) {
+                    Location l = lit.get(i);
+                    long when = start + (long) span * i / Math.max(1, lit.size());
+                    plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+                        if (l.getBlock().getType() == Material.FIRE) { l.getBlock().setType(Material.AIR, false); l.getWorld().spawnParticle(Particle.SMOKE, l.clone().add(0.5, 0.3, 0.5), 4, 0.2, 0.2, 0.2, 0.01); }
+                        tempFire.remove(l);
+                    }, when);
+                }
             }
             case "smoke" -> {
                 w.playSound(at, "minecraft:block.fire.extinguish", 1.2f, 0.6f);
@@ -229,10 +227,12 @@ public final class Grenades implements Listener {
         var w = t.smokeAt.getWorld();
         double r = t.type.radius();
         var rnd = ThreadLocalRandom.current();
-        for (int i = 0; i < 6; i++) {
-            Location l = t.smokeAt.clone().add((rnd.nextDouble() * 2 - 1) * r * 0.8, rnd.nextDouble() * 1.6, (rnd.nextDouble() * 2 - 1) * r * 0.8);
-            w.spawnParticle(Particle.CAMPFIRE_COSY_SMOKE, l, 1, 0.1, 0.1, 0.1, 0.004);
-            w.spawnParticle(Particle.CLOUD, l, 1, 0.3, 0.3, 0.3, 0.0);
+        int density = Math.max(1, plugin.getConfig().getInt("grenades.smoke-density", 28));
+        for (int i = 0; i < density; i++) {
+            Location l = t.smokeAt.clone().add((rnd.nextDouble() * 2 - 1) * r * 0.85, rnd.nextDouble() * 2.2, (rnd.nextDouble() * 2 - 1) * r * 0.85);
+            // big slow signal smoke fills the volume, cosy smoke adds the fine haze, clouds the bright body
+            w.spawnParticle(i % 3 == 0 ? Particle.CAMPFIRE_SIGNAL_SMOKE : Particle.CAMPFIRE_COSY_SMOKE, l, 1, 0.15, 0.1, 0.15, 0.003);
+            if (i % 2 == 0) w.spawnParticle(Particle.CLOUD, l, 1, 0.35, 0.3, 0.35, 0.0);
         }
         if (t.smokeLeft % 40 == 0) w.playSound(t.smokeAt, "minecraft:block.fire.extinguish", 0.2f, 0.5f);
     }
