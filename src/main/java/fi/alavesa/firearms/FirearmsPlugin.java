@@ -156,6 +156,7 @@ public final class FirearmsPlugin extends JavaPlugin {
                         sender.sendMessage(Component.text(res.models() + " .bbmodel converted, " + res.frames() + " animation frames baked, "
                             + res.placeholders() + " placeholder model(s)", NamedTextColor.GRAY));
                         if (!res.biggest().isEmpty()) sender.sendMessage(Component.text("Biggest: " + String.join(", ", res.biggest()), NamedTextColor.DARK_GRAY));
+                        for (String nte : res.notes()) sender.sendMessage(Component.text(nte, NamedTextColor.GRAY));
                         for (String w : res.warnings()) sender.sendMessage(Component.text("! " + w, NamedTextColor.YELLOW));
                         if (!dry) sender.sendMessage(Component.text("Now upload/apply the NEW Firearms-pack.zip - an old pack with this new index shows purple frames while firing.", NamedTextColor.YELLOW));
                     });
@@ -175,6 +176,20 @@ public final class FirearmsPlugin extends JavaPlugin {
                     if (c != null) sender.sendMessage(line(dir, c, "casing of " + g.id() + (c.equals(g.model() + "_casing") ? " (auto-detected)" : " - or add " + g.model() + "_casing.bbmodel")));
                 }
                 sender.sendMessage(line(dir, getConfig().getString("craters.model", "crater"), "crater (or crater.png)"));
+                return true;
+            }
+            case "clips" -> {
+                if (args.length < 2) { sender.sendMessage(Component.text("/firearms clips <model>", NamedTextColor.YELLOW)); return true; }
+                String model = args[1];
+                sender.sendMessage(Component.text("Clips the plugin knows for '" + model + "' (from models/anim-index.yml):", NamedTextColor.GOLD));
+                boolean any = false;
+                for (String clip : new String[]{"fire", "reload", "equip", "pump", "inspect", "unpin", "throw"}) {
+                    int[] a = registry.anim(model, clip);
+                    if (a == null) continue;
+                    any = true;
+                    sender.sendMessage(Component.text("  " + clip + ": " + a[0] + " frames x " + a[1] + " ticks" + (registry.animSounds(model, clip).isEmpty() ? "" : "  sounds " + registry.animSounds(model, clip)), NamedTextColor.GRAY));
+                }
+                if (!any) sender.sendMessage(Component.text("  none - run /firearms pack and check its 'clips:' lines; the animation names must match anim.names", NamedTextColor.YELLOW));
                 return true;
             }
             case "version" -> { return usage(sender); }
@@ -201,13 +216,13 @@ public final class FirearmsPlugin extends JavaPlugin {
 
     private boolean usage(CommandSender s) {
         s.sendMessage(Component.text("Firearms v" + getPluginMeta().getVersion() + (duplicateJars != null ? "  (WARNING: several jars: " + duplicateJars + ")" : ""), NamedTextColor.GOLD));
-        s.sendMessage(Component.text("/firearms list | give <gun|mag|ammo|vest|grenade> [amount] [player] | models | pack | check | reload | version", NamedTextColor.YELLOW));
+        s.sendMessage(Component.text("/firearms list | give <gun|mag|ammo|vest|grenade> [amount] [player] | models | pack | check | clips <model> | reload | version", NamedTextColor.YELLOW));
         return true;
     }
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        if (args.length == 1) return filter(Stream.of("list", "give", "models", "pack", "check", "reload", "version"), args[0]);
+        if (args.length == 1) return filter(Stream.of("list", "give", "models", "pack", "check", "clips", "reload", "version"), args[0]);
         if (args.length == 2 && args[0].equalsIgnoreCase("give")) {
             List<String> ids = new ArrayList<>(registry.gunIds());
             ids.addAll(registry.magIds());
@@ -216,6 +231,7 @@ public final class FirearmsPlugin extends JavaPlugin {
             ids.addAll(registry.grenadeIds());
             return filter(ids.stream(), args[1]);
         }
+        if (args.length == 2 && args[0].equalsIgnoreCase("clips")) return filter(registry.guns().stream().map(GunType::model), args[1]);
         if (args.length == 4 && args[0].equalsIgnoreCase("give")) return filter(Bukkit.getOnlinePlayers().stream().map(Player::getName), args[3]);
         return List.of();
     }

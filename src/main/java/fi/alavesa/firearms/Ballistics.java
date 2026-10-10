@@ -60,7 +60,7 @@ public final class Ballistics {
 
     /** Result of a trace: whichever came first. */
     private static final class Hit {
-        LivingEntity entity; Block block; BlockFace face; Location point; double dist; int penetrations;
+        Entity entity; Block block; BlockFace face; Location point; double dist; int penetrations; Vector dir;
     }
 
     public Ballistics(FirearmsPlugin plugin, Registry registry) {
@@ -139,23 +139,29 @@ public final class Ballistics {
 
     private void resolve(Hit hit, Player shooter, GunType gun, double distance, double dmgMult) {
         if (hit.entity != null) {
+            LivingEntity target = owner(hit.entity, shooter);
+            if (target == null) return;
             double f = falloff(gun, distance);
             // Shot through a penetrable wall: less damage per layer passed (ballistics.penetration-damage).
             double pen = Math.pow(Math.max(0, Math.min(1, plugin.getConfig().getDouble("ballistics.penetration-damage", 0.9))), hit.penetrations);
             double amount = gun.damage() * dmgMult * f * pen;
             if (amount <= 0) return;
-            amount = vestAbsorb(hit.entity, amount);
+            amount = vestAbsorb(target, amount);
             if (amount <= 0.001) return;
-            hit.entity.setNoDamageTicks(0);          // fast fire must register every round
-            double hpBefore = hit.entity.getHealth();
-            hit.entity.damage(amount, shooter);
-            // PvP off (server.properties / world / region): the game cancels player-vs-player damage, so hits
-            // register (sounds, vest) but nothing happens. Force it through as source-less damage.
-            if (hit.entity instanceof Player && !hit.entity.isDead() && hit.entity.getHealth() >= hpBefore - 0.001
-                && plugin.getConfig().getBoolean("bypass-pvp", true)) {
-                hit.entity.setNoDamageTicks(0);
-                hit.entity.damage(amount);
-                if (shooter != null && hit.entity.isDead()) hit.entity.getWorld().getPlayers().forEach(pl -> { });
+            blood(target, hit.point, hit.dir);
+            if (target instanceof Player victim && !plugin.getConfig().getBoolean("damage.hurt-animation", false)) {
+                hurtQuietly(victim, amount, shooter);
+            } else {
+                target.setNoDamageTicks(0);          // fast fire must register every round
+                double hpBefore = target.getHealth();
+                target.damage(amount, shooter);
+                // PvP off (server.properties / world / region): the game cancels player-vs-player damage, so hits
+                // register (sounds, vest) but nothing happens. Force it through as source-less damage.
+                if (target instanceof Player && !target.isDead() && target.getHealth() >= hpBefore - 0.001
+                    && plugin.getConfig().getBoolean("bypass-pvp", true)) {
+                    target.setNoDamageTicks(0);
+                    target.damage(amount);
+                }
             }
             if (shooter != null && shooter.isOnline())
                 shooter.playSound(shooter.getLocation(), "minecraft:entity.arrow.hit_player", 0.6f, 1.4f);
@@ -165,6 +171,41 @@ public final class Ballistics {
             w.playSound(hit.point, "minecraft:block.stone.hit", 0.5f, 1.2f);
             crater(hit.block, hit.point, hit.face);
         }
+    }
+
+    /** Damage a player WITHOUT the red hurt flash / hurt animation: absorption and health are lowered directly.
+     *  A lethal hit goes through the normal damage call so the kill is credited and the death message is right. */
+    private void hurtQuietly(Player victim, double amount, Player shooter) {
+        double abs = victim.getAbsorptionAmount();
+        double fromAbs = Math.min(abs, amount);
+        double rest = amount - fromAbs;
+        double hp = victim.getHealth();
+        if (hp - rest <= 0.001) {
+            victim.setNoDamageTicks(0);
+            double before = victim.getHealth();
+            victim.damage(Math.max(amount, hp + 1), shooter);
+            if (!victim.isDead() && victim.getHealth() >= before - 0.001) { victim.setNoDamageTicks(0); victim.damage(Math.max(amount, hp + 1)); }
+            if (!victim.isDead() && victim.getHealth() >= before - 0.001) victim.setHealth(0);
+            return;
+        }
+        if (fromAbs > 0) victim.setAbsorptionAmount(abs - fromAbs);
+        if (rest > 0) victim.setHealth(hp - rest);
+        victim.getWorld().playSound(victim.getLocation(), "minecraft:entity.player.hurt", 0.8f, 1.0f);
+        victim.sendActionBar(net.kyori.adventure.text.Component.text("Hit!", net.kyori.adventure.text.format.NamedTextColor.RED));
+    }
+
+    /** Blood: a burst of red particles at the wound and a splatter decal on the wall behind the target. */
+    private void blood(LivingEntity target, Location wound, Vector dir) {
+        if (!plugin.getConfig().getBoolean("blood.enabled", true) || dir == null) return;
+        World w = target.getWorld();
+        w.spawnParticle(Particle.BLOCK, wound, 14, 0.15, 0.2, 0.15, 0.08, Material.REDSTONE_BLOCK.createBlockData());
+        double range = plugin.getConfig().getDouble("blood.range", 4.0);
+        RayTraceResult wall = w.rayTraceBlocks(wound, dir, range, FluidCollisionMode.NEVER, true);
+        if (wall == null || wall.getHitBlock() == null || wall.getHitBlockFace() == null) return;
+        if (passable(wall.getHitBlock().getType()) && ignore.contains(wall.getHitBlock().getType())) return;
+        double sz = plugin.getConfig().getDouble("blood.size", 0.7) * (0.7 + ThreadLocalRandom.current().nextDouble() * 0.6);
+        decal(wall.getHitBlock(), wall.getHitPosition().toLocation(w), wall.getHitBlockFace(), plugin.getConfig().getString("blood.model", "blood"),
+            (float) sz, plugin.getConfig().getDouble("blood.seconds", 60));
     }
 
     /** A worn vest soaks its share of the bullet into its durability; the rest reaches the wearer. */
@@ -212,8 +253,9 @@ public final class Ballistics {
             if (ed == Double.MAX_VALUE && bd == Double.MAX_VALUE) return null;
             if (ed <= bd) {
                 Hit h = new Hit();
-                h.entity = (LivingEntity) ent.getHitEntity();
+                h.entity = ent.getHitEntity();
                 h.point = ent.getHitPosition().toLocation(w);
+                h.dir = dir.clone();
                 h.dist = used + ed;
                 h.penetrations = penetrations;
                 return h;
@@ -249,10 +291,24 @@ public final class Ballistics {
     }
 
     private static boolean target(Entity e, Player shooter) {
-        if (!(e instanceof LivingEntity le) || e == shooter || e.isDead()) return false;
+        if (e == shooter || e.isDead()) return false;
+        if (e instanceof org.bukkit.entity.Interaction) return !e.getScoreboardTags().contains("firearms_crater");   // BetterModel-style hitboxes
+        if (!(e instanceof LivingEntity le)) return false;
         if (e instanceof Player p && (p.getGameMode() == org.bukkit.GameMode.SPECTATOR || p.getGameMode() == org.bukkit.GameMode.CREATIVE)) return false;
         if (e instanceof org.bukkit.entity.ArmorStand as && as.isMarker()) return false;
         return !le.isInvulnerable();
+    }
+
+    /** A hit on an Interaction hitbox (custom-model mobs) is credited to the nearest living non-player it belongs to. */
+    private static LivingEntity owner(Entity hit, Player shooter) {
+        if (hit instanceof LivingEntity le) return le;
+        LivingEntity best = null; double bd = 9;
+        for (Entity e : hit.getNearbyEntities(3, 3, 3)) {
+            if (!(e instanceof LivingEntity le) || e instanceof Player || e == shooter || e.isDead() || e instanceof org.bukkit.entity.ArmorStand) continue;
+            double d = e.getLocation().distanceSquared(hit.getLocation());
+            if (d < bd) { bd = d; best = le; }
+        }
+        return best;
     }
 
     /** Muzzle point in the world for this shot: eye + right/up/forward offsets from the gun. */
@@ -310,12 +366,16 @@ public final class Ballistics {
 
     private void crater(Block block, Location point, BlockFace face) {
         if (!plugin.getConfig().getBoolean("craters.enabled", true) || face == null) return;
+        decal(block, point, face, plugin.getConfig().getString("craters.model", "crater"), (float) plugin.getConfig().getDouble("craters.size", 0.35), plugin.getConfig().getDouble("craters.seconds", 90));
+    }
+
+    /** A flat decal (crater, blood...) laid on a block face, fading after `seconds`. */
+    private void decal(Block block, Location point, BlockFace face, String model, float size, double seconds) {
         World w = block.getWorld();
         Vector n = face.getDirection();
-        Location at = point.clone().add(n.clone().multiply(0.015));
-        float size = (float) plugin.getConfig().getDouble("craters.size", 0.35);
+        Location at = point.clone().add(n.clone().multiply(0.015 + ThreadLocalRandom.current().nextDouble() * 0.01));
         ItemDisplay d = w.spawn(at, ItemDisplay.class, disp -> {
-            disp.setItemStack(registry.buildCrater());
+            disp.setItemStack(registry.buildDecal(model));
             disp.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.FIXED);
             disp.setPersistent(false);
             disp.setBrightness(new org.bukkit.entity.Display.Brightness(8, 15));
@@ -329,7 +389,7 @@ public final class Ballistics {
         craters.addLast(d.getUniqueId());
         int max = plugin.getConfig().getInt("craters.max-per-world", 400);
         while (craters.size() > max) removeCrater(craters.pollFirst());
-        long life = Math.max(20, (long) (plugin.getConfig().getDouble("craters.seconds", 90) * 20));
+        long life = Math.max(20, (long) (seconds * 20));
         plugin.getServer().getScheduler().runTaskLater(plugin, () -> { craters.remove(d.getUniqueId()); removeCrater(d.getUniqueId()); }, life);
     }
 

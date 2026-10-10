@@ -42,7 +42,8 @@ import java.util.zip.ZipOutputStream;
  */
 public final class PackGenerator {
 
-    public record Result(int models, int frames, int placeholders, List<String> warnings, File zip, long bytes, List<String> biggest, long millis) { }
+    public record Result(int models, int frames, int placeholders, List<String> warnings, File zip, long bytes, List<String> biggest, long millis, List<String> notes) { }
+    private final List<String> notes = new ArrayList<>();
     private final boolean dryRun;
     private final Map<String, Long> bytesPerModel = new LinkedHashMap<>();
     private String currentName;
@@ -97,6 +98,7 @@ public final class PackGenerator {
         for (MagType m : registry.mags()) model(dir, m.model(), "mag", done);
         for (AmmoType a : registry.ammos()) model(dir, a.model(), "ammo", done);
         model(dir, plugin.getConfig().getString("craters.model", "crater"), "crater", done);
+        model(dir, plugin.getConfig().getString("blood.model", "blood"), "blood", done);
         for (GrenadeType gt : registry.grenades()) model(dir, gt.model(), "grenade", done);
         Set<String> casingModels = new LinkedHashSet<>();
         for (GunType g : registry.guns()) { String c = registry.casingModel(g); if (c != null) casingModels.add(c); }
@@ -181,7 +183,7 @@ public final class PackGenerator {
             Files.move(tmp.toPath(), zip.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             idx.save(new File(dir, "anim-index.yml"));
         }
-        return new Result(models, frames, placeholders, warnings, zip, bytes, biggest, System.currentTimeMillis() - t0);
+        return new Result(models, frames, placeholders, warnings, zip, bytes, biggest, System.currentTimeMillis() - t0, notes);
     }
 
     private void put(String path, String text) { putBytes(path, text.getBytes(StandardCharsets.UTF_8)); }
@@ -478,6 +480,14 @@ public final class PackGenerator {
                 tex.addProperty("particle", NS + ":item/" + path(name));
                 elements.add(cube(new double[]{0, 0, 7.9}, new double[]{16, 16, 8.1}, "#0", new double[]{0, 0, 16, 16}, null));
             }
+            case "blood" -> {
+                File custom = new File(dir, name + ".png");
+                byte[] png = custom.exists() ? Files.readAllBytes(custom.toPath()) : bloodPng();
+                files.put("assets/" + NS + "/textures/item/" + path(name) + ".png", png);
+                tex.addProperty("0", NS + ":item/" + path(name));
+                tex.addProperty("particle", NS + ":item/" + path(name));
+                elements.add(cube(new double[]{0, 0, 7.9}, new double[]{16, 16, 8.1}, "#0", new double[]{0, 0, 16, 16}, null));
+            }
             case "mag" -> {
                 tex.addProperty("0", "minecraft:block/iron_block");
                 tex.addProperty("particle", "minecraft:block/iron_block");
@@ -696,6 +706,26 @@ public final class PackGenerator {
             int a = d > 1 ? 0 : (int) (255 * brightness * Math.pow(1 - d, 1.8));
             int g = 170 + (int) (60 * (1 - d)), b = (int) (70 * (1 - d));
             img.setRGB(x, y, (a << 24) | (255 << 16) | (g << 8) | b);
+        }
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ImageIO.write(img, "png", out);
+        return out.toByteArray();
+    }
+
+    /** A splatter: a few dark-red blobs with drips, transparent elsewhere. */
+    private static byte[] bloodPng() throws IOException {
+        BufferedImage img = new BufferedImage(32, 32, BufferedImage.TYPE_INT_ARGB);
+        java.util.Random r = new java.util.Random(7);
+        double[][] blobs = new double[9][];
+        for (int i = 0; i < blobs.length; i++) blobs[i] = new double[]{ 10 + r.nextDouble() * 12, 8 + r.nextDouble() * 14, 2 + r.nextDouble() * 5 };
+        for (int y = 0; y < 32; y++) for (int x = 0; x < 32; x++) {
+            double best = 0;
+            for (double[] b : blobs) { double d = Math.hypot(x - b[0], y - b[1]) / b[2]; best = Math.max(best, 1 - d); }
+            for (int i = 0; i < 4; i++) { double bx = 12 + i * 3.5, top = 14 + i * 2; if (Math.abs(x - bx) < 0.8 && y > top && y < top + 6 + i * 3) best = Math.max(best, 0.6); }   // drips
+            if (best <= 0.05) continue;
+            int a = (int) (255 * Math.min(1, best * 1.4));
+            int red = 120 + (int) (60 * best);
+            img.setRGB(x, y, (a << 24) | (red << 16) | (12 << 8) | 14);
         }
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ImageIO.write(img, "png", out);
@@ -992,7 +1022,12 @@ public final class PackGenerator {
             clips.put(key, new int[]{n, clipTicks});
             if (!clipSounds.isEmpty()) clipSoundIndex.computeIfAbsent(name, x -> new LinkedHashMap<>()).put(key, clipSounds);
         }
-        if (!clips.isEmpty()) animIndex.put(name, clips);
+        if (!clips.isEmpty()) {
+            animIndex.put(name, clips);
+            StringBuilder sb = new StringBuilder(name + " clips:");
+            for (var ce : clips.entrySet()) sb.append(' ').append(ce.getKey()).append('(').append(ce.getValue()[0]).append('x').append(ce.getValue()[1]).append(')');
+            notes.add(sb.toString());
+        } else notes.add(name + " clips: none (no animations in the .bbmodel)");
     }
 
     private static boolean containsAny(String name, List<String> words) {
@@ -1118,7 +1153,9 @@ public final class PackGenerator {
         if (currentGun != null && currentGun.animNames() != null)
             for (String clip : currentGun.animNames().getKeys(false)) table.put(clip, lower(currentGun.animNames().getStringList(clip)));
         for (var e : table.entrySet()) for (String k : e.getValue()) if (n.equals(k)) return e.getKey();
-        for (var e : table.entrySet()) for (String k : e.getValue()) if (!k.isEmpty() && n.contains(k)) return e.getKey();
+        String bestClip = null; int bestLen = 0;
+        for (var e : table.entrySet()) for (String k : e.getValue()) if (!k.isEmpty() && n.contains(k) && k.length() > bestLen) { bestLen = k.length(); bestClip = e.getKey(); }
+        if (bestClip != null) return bestClip;
         return n.replaceAll("[^a-z0-9_]", "_");
     }
 
@@ -1437,6 +1474,9 @@ public final class PackGenerator {
         final class Part {
             Bone bone; String suffix; int variant;           // 0 plain, 1 classic hand, 2 slim hand, 3 flash (model), 4 generated flash
             List<Cube> cubes = new ArrayList<>(); double k = 1; List<Integer> tints = new ArrayList<>(); boolean written;
+            double[] pivot;                                  // rotation pivot of this part (bone origin, or a free-rotated cube's origin)
+            double[][] extra = identity();                   // extra local transform below the bone (a free-rotated cube's own rotation)
+            Cube soloCube;                                   // set when this part is one cube with its own exact rotation
             String geomPath() { return mpath + "__g" + suffix; }   // geometry; wrappers use "__b" (rest pose included)
         }
 
@@ -1447,10 +1487,19 @@ public final class PackGenerator {
             root.name = "root"; root.uuid = "__root"; root.origin = new double[]{8, 8, 8};
             // group cubes by bone and kind
             Map<Bone, Part[]> byBone = new LinkedHashMap<>();
+            List<Part> solo = new ArrayList<>();
             java.util.function.BiConsumer<Cube, Integer> add = (c, variant) -> {
                 Bone b = c.bone == null ? root : c.bone;
+                if (c.tint < 0 && !exactRotation(c)) {
+                    // a cube rotated by an angle a Java element cannot hold (30, 60, 100...): its own part, so the
+                    // display transform carries the exact rotation about the cube's own pivot
+                    Part sp = new Part(); sp.bone = b; sp.variant = variant; sp.soloCube = c; sp.pivot = c.origin.clone();
+                    sp.extra = mul(mul(translate(c.origin[0], c.origin[1], c.origin[2]), rotZYX(c.rotation)), translate(-c.origin[0], -c.origin[1], -c.origin[2]));
+                    sp.cubes.add(c); solo.add(sp);
+                    return;
+                }
                 Part[] arr = byBone.computeIfAbsent(b, x -> new Part[4]);
-                if (arr[variant] == null) { arr[variant] = new Part(); arr[variant].bone = b; arr[variant].variant = variant; }
+                if (arr[variant] == null) { arr[variant] = new Part(); arr[variant].bone = b; arr[variant].variant = variant; arr[variant].pivot = b.origin.clone(); }
                 arr[variant].cubes.add(c);
                 if (c.tint >= 0) arr[variant].tints.add(c.tint);
             };
@@ -1464,8 +1513,11 @@ public final class PackGenerator {
                 for (Part part : e.getValue()) if (part != null) { part.suffix = bi + (part.variant == 1 ? "h" : part.variant == 2 ? "s" : part.variant == 3 ? "f" : ""); parts.add(part); }
                 bi++;
             }
+            int si = 0;
+            for (Part sp : solo) { sp.suffix = "c" + (si++) + (sp.variant == 3 ? "f" : ""); parts.add(sp); }
+            if (!solo.isEmpty()) report.add(name + ": " + solo.size() + " cube(s) with a free rotation angle got their own exact part");
             if (flashAt != null && parts.stream().noneMatch(pt -> pt.variant == 3)) {   // generated flash cube as its own part
-                Part fp = new Part(); fp.bone = root; fp.variant = 4; fp.suffix = "flash";
+                Part fp = new Part(); fp.bone = root; fp.variant = 4; fp.suffix = "flash"; fp.pivot = root.origin.clone();
                 Cube fc = new Cube(); fc.uuid = "__flash"; fc.name = "flash"; fc.flash = true;
                 double sz = plugin.getConfig().getDouble("flash.size", 2.5) / 2;
                 fc.from = new double[]{flashAt[0] - sz, flashAt[1] - sz, flashAt[2] - sz * 1.6}; fc.to = new double[]{flashAt[0] + sz, flashAt[1] + sz, flashAt[2] + sz * 1.6};
@@ -1482,8 +1534,7 @@ public final class PackGenerator {
         private void writeGeometry(Part part) {
             if (part.written) return;
             part.written = true;
-            Bone b = part.bone;
-            double[] shift = {8 - b.origin[0], 8 - b.origin[1], 8 - b.origin[2]};
+            double[] shift = {8 - part.pivot[0], 8 - part.pivot[1], 8 - part.pivot[2]};
             // extents after the shift -> fit factor k around the centre
             double far = 0;
             for (Cube c : part.cubes) for (int i = 0; i < 3; i++) {
@@ -1494,7 +1545,8 @@ public final class PackGenerator {
             JsonArray elements = new JsonArray();
             int localTint = 0;
             for (Cube c : part.cubes) {
-                double[][] Re = rot3(c.rotation);
+                boolean solo = part.soloCube == c;            // its rotation lives in the display transform
+                double[][] Re = solo ? rot3(new double[]{0, 0, 0}) : rot3(c.rotation);
                 int[][] Pe = nearestPerm(Re);
                 double[] eulE = euler3(mul3(transpose3(Pe), Re));
                 int ca = 0;
@@ -1577,8 +1629,8 @@ public final class PackGenerator {
             for (Part part : parts) {
                 if ((part.variant == 3 || part.variant == 4) && !flashFrame) continue;
                 writeGeometry(part);
-                double[][] M = world(part.bone, clip, t, cache);
-                double[] Pw = apply(M, part.bone.origin);
+                double[][] M = mul(world(part.bone, clip, t, cache), part.extra);
+                double[] Pw = apply(M, part.pivot);
                 double[][] Rw = {{M[0][0], M[0][1], M[0][2]}, {M[1][0], M[1][1], M[1][2]}, {M[2][0], M[2][1], M[2][2]}};
                 JsonObject disp = new JsonObject();
                 for (String ctx : CTX) {
@@ -1609,6 +1661,19 @@ public final class PackGenerator {
             List<Object[]> sl = new ArrayList<>(plain); sl.addAll(slim ? slimL : classic);
             compositeParts.put(cmd, List.of(plain, hands ? cl : plain, hands ? sl : plain));
         }
+    }
+
+    /** Can a Java element hold this cube's rotation exactly (one axis, multiple of 22.5, |a| <= 45)? */
+    private static boolean exactRotation(Cube c) {
+        if (c.rotation[0] == 0 && c.rotation[1] == 0 && c.rotation[2] == 0) return true;
+        double[][] R = rot3(c.rotation);
+        int[][] P = nearestPerm(R);
+        double[] e = euler3(mul3(transpose3(P), R));
+        int a = 0;
+        for (int i = 1; i < 3; i++) if (Math.abs(e[i]) > Math.abs(e[a])) a = i;
+        for (int i = 0; i < 3; i++) if (i != a && Math.abs(e[i]) > 0.5) return false;
+        double snapped = Math.round(e[a] / 22.5) * 22.5;
+        return Math.abs(e[a] - snapped) < 0.5 && Math.abs(snapped) <= 45;
     }
 
     private static double[][] rotXYZ(double[] deg) {

@@ -58,6 +58,17 @@ ballistics:
 # enable real PvP if you want vanilla kill credit / death messages.
 bypass-pvp: true
 
+# ---- Getting shot ----
+damage:
+  hurt-animation: false   # false = no red flash / hurt wobble on the victim: health is lowered directly (lethal hits
+                          # still go through the normal damage so the kill is credited). true = vanilla hurt effect.
+blood:
+  enabled: true
+  range: 4.0             # how far behind the victim a wall can be for a splatter
+  seconds: 60            # how long a splatter stays
+  size: 0.7
+  model: blood           # models/blood.bbmodel or models/blood.png to retexture
+
 # ---- Shell casings ----
 casings:
   enabled: true
@@ -105,6 +116,7 @@ icons:
 # ---- Grenades ----
 grenades:
   smoke-density: 28      # particles per tick in a smoke cloud (higher = less see-through, more client load)
+  throw-delay-ticks: 8   # the grenade never leaves the hand sooner than this after the click (lets the throw show)
 
 # ---- Craters (bullet holes) ----
 craters:

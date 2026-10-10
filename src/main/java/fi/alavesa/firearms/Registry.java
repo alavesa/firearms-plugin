@@ -430,10 +430,12 @@ public final class Registry {
         return item;
     }
 
-    public ItemStack buildCrater() {
+    public ItemStack buildCrater() { return buildDecal(plugin.getConfig().getString("craters.model", "crater")); }
+
+    public ItemStack buildDecal(String model) {
         ItemStack item = new ItemStack(base());
         ItemMeta meta = item.getItemMeta();
-        setModel(meta, plugin.getConfig().getString("craters.model", "crater"));
+        setModel(meta, model);
         meta.getPersistentDataContainer().set(craterKey, PersistentDataType.BYTE, (byte) 1);
         item.setItemMeta(meta);
         return item;

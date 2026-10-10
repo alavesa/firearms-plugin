@@ -88,7 +88,15 @@ public final class Grenades implements Listener {
         int fuseTicks = (int) Math.round(g.fuse() * 20);
         final int fuse = g.cook() ? Math.max(1, fuseTicks - animTicks) : fuseTicks;
         p.playSound(p.getLocation(), "minecraft:item.flintandsteel.use", 0.8f, 1.6f);
-        playClip(p, g, item, "unpin", () -> playClip(p, g, item, "throw", () -> launch(p, g, fuse)));
+        // the grenade leaves the hand when the throw clip ends - never before grenades.throw-delay-ticks after the
+        // click, so a short/missing throw animation still shows the arm going back and forward
+        int minDelay = Math.max(0, plugin.getConfig().getInt("grenades.throw-delay-ticks", 8));
+        int unpinTicks = un == null ? 0 : un[0] * un[1], throwTicks = th == null ? 0 : th[0] * th[1];
+        long wait = Math.max(0, minDelay - unpinTicks - throwTicks);
+        playClip(p, g, item, "unpin", () -> playClip(p, g, item, "throw", () -> {
+            if (wait <= 0) launch(p, g, fuse);
+            else plugin.getServer().getScheduler().runTaskLater(plugin, () -> launch(p, g, fuse), wait);
+        }));
     }
 
     private void launch(Player p, GrenadeType g, int fuseTicks) {
