@@ -145,6 +145,17 @@ public final class Ballistics {
             LivingEntity target = owner(hit.entity, shooter);
             if (target == null) return;
             double f = falloff(gun, distance);
+            if (vehicleLike(target)) {
+                // a car / machine: plain damage to its health (the vehicle plugin handles destruction), no blood, no zones
+                double amount = gun.damage() * dmgMult * f * plugin.getConfig().getDouble("damage.vehicle-multiplier", 1.0);
+                if (amount <= 0) return;
+                applyingDamage = true;
+                try { target.setNoDamageTicks(0); double hp = target.getHealth(); target.damage(amount, shooter); if (!target.isDead() && target.getHealth() >= hp - 0.001) { target.setNoDamageTicks(0); target.damage(amount); } }
+                finally { applyingDamage = false; }
+                hit.point.getWorld().playSound(hit.point, "minecraft:block.anvil.land", 0.4f, 1.9f);
+                hit.point.getWorld().spawnParticle(Particle.CRIT, hit.point, 6, 0.1, 0.1, 0.1, 0.05);
+                return;
+            }
             // Shot through a penetrable wall: less damage per layer passed (ballistics.penetration-damage).
             double pen = Math.pow(Math.max(0, Math.min(1, plugin.getConfig().getDouble("ballistics.penetration-damage", 0.9))), hit.penetrations);
             String zone = zone(target, hit.point, plugin);
@@ -328,10 +339,10 @@ public final class Ballistics {
 
     /** A hit on an Interaction hitbox (custom-model mobs) is credited to the nearest living non-player it belongs to. */
     private static LivingEntity owner(Entity hit, Player shooter) {
-        if (hit instanceof LivingEntity le) return vehicleLike(le) ? null : le;
+        if (hit instanceof LivingEntity le) return le;
         LivingEntity best = null; double bd = 9;
         for (Entity e : hit.getNearbyEntities(3, 3, 3)) {
-            if (!(e instanceof LivingEntity le) || e instanceof Player || e == shooter || e.isDead() || e instanceof org.bukkit.entity.ArmorStand || vehicleLike(le)) continue;
+            if (!(e instanceof LivingEntity le) || e instanceof Player || e == shooter || e.isDead() || e instanceof org.bukkit.entity.ArmorStand) continue;
             double d = e.getLocation().distanceSquared(hit.getLocation());
             if (d < bd) { bd = d; best = le; }
         }

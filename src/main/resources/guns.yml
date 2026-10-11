@@ -29,7 +29,8 @@
 #  h-recoil       horizontal kick, random left/right up to this many degrees
 #  falloff-min    damage multiplier at max range (damage falls linearly from hitscan-range to range)
 #  pellets        rounds per trigger pull (shotgun spread)
-#  sound / pitch  shot sound
+#  sound / pitch  shot sound - a Minecraft id or firearms:<file> for any .ogg you drop into models/sounds/
+#  reload-sound / equip-sound / empty-sound   optional custom sounds the same way (e.g. "firearms:ak_reload")
 #  muzzle         "right,up,forward" in blocks from the eye: where the tracer + flash start (NOT inside the head)
 #  flash          "x,y,z" in model pixels: where the baked muzzle-flash cube sits in the fire frames (default: front end)
 #  display        optional exact first/third-person pose, same keys as Blockbench's Display tab, e.g.

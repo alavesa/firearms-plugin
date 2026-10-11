@@ -72,6 +72,7 @@ blood:
   model: blood
 # Hit zones: multiplier by where the bullet lands on the hitbox (height fraction). Vests do not cover the head.
 damage:
+  vehicle-multiplier: 1.0  # bullets vs cars/machines (their own health; no blood, no hit zones)
   zones:
     head: 3.0
     body: 1.0
@@ -190,7 +191,7 @@ anim:
     reload:  [reload, rel, mag]
     equip:   [equip, draw, deploy, pull, ready]
     pump:    [pump, rack, cock, bolt, cycle]
-    inspect: [inspect, look, check, idle]
+    inspect: [inspect, look, check]   # (not "idle": an idle animation would steal the inspect clip)
   # If the baked whole-gun (root bone) motion comes out mirrored in first person, flip the sign per axis here.
   root-rotation-sign: [1, 1, 1]
   root-position-sign: [1, 1, 1]

@@ -111,6 +111,15 @@ public final class PackGenerator {
             for (GunType g : registry.guns()) icon(dir, g.model(), g.name(), g.id());
             for (GrenadeType gt : registry.grenades()) icon(dir, gt.model(), gt.name(), gt.id());
         }
+        File soundsDir = new File(dir, "sounds");
+        File[] oggs = soundsDir.listFiles((d, n) -> n.toLowerCase(Locale.ROOT).endsWith(".ogg"));
+        if (oggs != null) for (File ogg : oggs) {
+            String sname = ogg.getName().substring(0, ogg.getName().length() - 4).toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_]", "_");
+            if (!files.containsKey("assets/" + NS + "/sounds/" + sname + ".ogg")) files.put("assets/" + NS + "/sounds/" + sname + ".ogg", Files.readAllBytes(ogg.toPath()));
+            soundEvents.computeIfAbsent(sname, x -> new ArrayList<>());
+            if (!soundEvents.get(sname).contains(sname)) soundEvents.get(sname).add(sname);
+        }
+        if (oggs != null && oggs.length > 0) report.add("sounds in the pack (use as firearms:<name> in guns.yml or keyframes): " + soundEvents.keySet());
         if (!soundEvents.isEmpty()) {
             JsonObject sj = new JsonObject();
             for (var e : soundEvents.entrySet()) {
@@ -784,6 +793,7 @@ public final class PackGenerator {
         String uuid, name = ""; double[] from, to, origin = {0, 0, 0}, rotation = {0, 0, 0}; double inflate = 0; JsonObject faces; Bone bone;
         boolean flash;   // a muzzle-flash cube modelled in the .bbmodel: hidden except on the flash frames
         int tint = -1;   // >= 0: a skin pixel quad (hands) - face texture #skin, this tint index
+        boolean mirror, boxUv; double[] uvOffset = {0, 0};
     }
 
     private static final class Clip {
@@ -838,11 +848,21 @@ public final class PackGenerator {
         Map<String, Cube> cubes = new LinkedHashMap<>();
         if (root.has("elements")) for (JsonElement ee : root.getAsJsonArray("elements")) {
             JsonObject e = ee.getAsJsonObject();
-            if (e.has("type") && !"cube".equals(str(e.get("type"), "cube"))) { meshes++; continue; }
             if (e.has("visibility") && !e.get("visibility").getAsBoolean()) continue;
+            if (e.has("type") && "mesh".equals(str(e.get("type"), "cube"))) {
+                // A Blockbench MESH (cylinder wheels, bevelled parts...): Java item models cannot hold it. Approximate
+                // it by its bounding box so the part at least exists, and say so.
+                Cube m = meshBox(e, cubes.size());
+                if (m != null) { cubes.put(m.uuid, m); meshes++; }
+                continue;
+            }
+            if (e.has("type") && !"cube".equals(str(e.get("type"), "cube"))) continue;
             Cube c = new Cube();
             c.uuid = str(e.get("uuid"), "e" + cubes.size());
             c.name = str(e.get("name"), "");
+            c.mirror = e.has("mirror_uv") && e.get("mirror_uv").isJsonPrimitive() && e.get("mirror_uv").getAsBoolean();
+            c.boxUv = e.has("box_uv") ? e.get("box_uv").getAsBoolean() : (root.has("meta") && root.getAsJsonObject("meta").has("box_uv") && root.getAsJsonObject("meta").get("box_uv").getAsBoolean());
+            if (e.has("uv_offset") && e.get("uv_offset").isJsonArray()) { JsonArray u = e.getAsJsonArray("uv_offset"); c.uvOffset = new double[]{ num(u.get(0), 0), num(u.get(1), 0) }; }
             c.from = vec(e.get("from")); c.to = vec(e.get("to"));
             if (e.has("origin")) c.origin = vec(e.get("origin"));
             if (e.has("inflate")) c.inflate = num(e.get("inflate"), 0);
@@ -850,7 +870,7 @@ public final class PackGenerator {
             c.faces = e.has("faces") ? e.getAsJsonObject("faces") : new JsonObject();
             cubes.put(c.uuid, c);
         }
-        if (meshes > 0) warnings.add(name + ": " + meshes + " MESH element(s) skipped - Java item models only support cubes; convert meshes to cubes in Blockbench");
+        if (meshes > 0) warnings.add(name + ": " + meshes + " MESH element(s) replaced by their bounding boxes - Java item models only hold cubes; rebuild wheels/round parts from cubes for the real shape");
         if (cubes.isEmpty()) throw new IOException("no cube elements");
         // --- bones
         List<Bone> top = new ArrayList<>();
@@ -954,7 +974,7 @@ public final class PackGenerator {
         // --- animations -> frames
         int frameTicks = Math.max(1, plugin.getConfig().getInt("anim.frame-ticks", 1));
         Map<String, int[]> clips = new LinkedHashMap<>();
-        if (root.has("animations")) for (JsonElement ae : root.getAsJsonArray("animations")) {
+        if (root.has("animations")) for (JsonElement ae : pickAnimations(name, root.getAsJsonArray("animations"))) {
             JsonObject a = ae.getAsJsonObject();
             Clip clip = new Clip();
             clip.name = str(a.get("name"), "anim");
@@ -1030,6 +1050,82 @@ public final class PackGenerator {
             for (var ce : clips.entrySet()) sb.append(' ').append(ce.getKey()).append('(').append(ce.getValue()[0]).append('x').append(ce.getValue()[1]).append(')');
             notes.add(sb.toString());
         } else notes.add(name + " clips: none (no animations in the .bbmodel)");
+    }
+
+    /** When several animations map to the same clip, the best-matching NAME wins (exact "inspect" beats "inspection_idle"),
+     *  not the one that happens to come first in the file. The losers are reported. */
+    private List<JsonElement> pickAnimations(String model, JsonArray anims) {
+        Map<String, JsonElement> best = new LinkedHashMap<>();
+        Map<String, Integer> bestScore = new HashMap<>();
+        List<String> dropped = new ArrayList<>();
+        for (JsonElement ae : anims) {
+            JsonObject a = ae.getAsJsonObject();
+            String n = str(a.get("name"), "anim");
+            String key = clipKey(n);
+            int score = clipScore(n);
+            Integer cur = bestScore.get(key);
+            if (cur == null || score > cur) {
+                if (best.containsKey(key)) dropped.add(str(best.get(key).getAsJsonObject().get("name"), "?") + " (" + key + " is '" + n + "')");
+                best.put(key, ae); bestScore.put(key, score);
+            } else dropped.add(n + " (" + key + " is '" + str(best.get(key).getAsJsonObject().get("name"), "?") + "')");
+        }
+        for (String d : dropped) warnings.add(model + ": animation ignored: " + d);
+        return new ArrayList<>(best.values());
+    }
+
+    /** Bounding-box cube for a Blockbench mesh element (vertices are relative to its origin). */
+    private static Cube meshBox(JsonObject e, int index) {
+        if (!e.has("vertices") || !e.get("vertices").isJsonObject()) return null;
+        double[] mn = {1e9, 1e9, 1e9}, mx = {-1e9, -1e9, -1e9};
+        for (var v : e.getAsJsonObject("vertices").entrySet()) {
+            if (!v.getValue().isJsonArray()) continue;
+            double[] p = vec(v.getValue());
+            for (int i = 0; i < 3; i++) { mn[i] = Math.min(mn[i], p[i]); mx[i] = Math.max(mx[i], p[i]); }
+        }
+        if (mn[0] > mx[0]) return null;
+        Cube c = new Cube();
+        c.uuid = str(e.get("uuid"), "m" + index);
+        c.name = str(e.get("name"), "mesh");
+        c.origin = e.has("origin") ? vec(e.get("origin")) : new double[]{0, 0, 0};
+        if (e.has("rotation")) c.rotation = vec(e.get("rotation"));
+        c.from = new double[]{ c.origin[0] + mn[0], c.origin[1] + mn[1], c.origin[2] + mn[2] };
+        c.to = new double[]{ c.origin[0] + mx[0], c.origin[1] + mx[1], c.origin[2] + mx[2] };
+        for (int i = 0; i < 3; i++) if (c.to[i] - c.from[i] < 0.05) c.to[i] = c.from[i] + 0.05;
+        JsonElement tex = null;
+        if (e.has("faces") && e.get("faces").isJsonObject())
+            for (var f : e.getAsJsonObject("faces").entrySet()) if (f.getValue().isJsonObject() && f.getValue().getAsJsonObject().has("texture")) { tex = f.getValue().getAsJsonObject().get("texture"); break; }
+        c.faces = new JsonObject();
+        for (String f : FACE) {
+            JsonObject face = new JsonObject();
+            face.add("texture", tex == null ? new com.google.gson.JsonPrimitive(0) : tex);
+            c.faces.add(f, face);   // no uv -> box-uv/full texture fallback
+        }
+        return c;
+    }
+
+    private static JsonObject boxUvFaces(Cube c, JsonObject faces) {
+        double dx = Math.abs(c.to[0] - c.from[0]), dy = Math.abs(c.to[1] - c.from[1]), dz = Math.abs(c.to[2] - c.from[2]);
+        double u = c.uvOffset[0], v = c.uvOffset[1];
+        Map<String, double[]> uv = new LinkedHashMap<>();
+        uv.put("up",    new double[]{u + dz, v, u + dz + dx, v + dz});
+        uv.put("down",  new double[]{u + dz + dx, v + dz, u + dz + 2 * dx, v});
+        uv.put("west",  new double[]{u, v + dz, u + dz, v + dz + dy});
+        uv.put("north", new double[]{u + dz, v + dz, u + dz + dx, v + dz + dy});
+        uv.put("east",  new double[]{u + dz + dx, v + dz, u + 2 * dz + dx, v + dz + dy});
+        uv.put("south", new double[]{u + 2 * dz + dx, v + dz, u + 2 * dz + 2 * dx, v + dz + dy});
+        if (c.mirror) { double[] ea = uv.get("east"), we = uv.get("west"); uv.put("east", we); uv.put("west", ea); }
+        JsonObject out = new JsonObject();
+        for (String f : FACE) {
+            JsonObject face = faces.has(f) && faces.get(f).isJsonObject() ? faces.getAsJsonObject(f).deepCopy() : new JsonObject();
+            if (!face.has("uv") || !face.get("uv").isJsonArray()) {
+                double[] r = uv.get(f);
+                JsonArray a = new JsonArray(); for (double d : r) a.add(d);
+                face.add("uv", a);
+            }
+            if (!face.has("texture")) face.addProperty("texture", 0);
+            out.add(f, face);
+        }
+        return out;
     }
 
     private static boolean containsAny(String name, List<String> words) {
@@ -1142,11 +1238,30 @@ public final class PackGenerator {
         DEFAULT_NAMES.put("reload", List.of("reload", "rel", "mag"));
         DEFAULT_NAMES.put("equip", List.of("equip", "draw", "deploy", "pull", "ready"));
         DEFAULT_NAMES.put("pump", List.of("pump", "rack", "cock", "bolt", "cycle"));
-        DEFAULT_NAMES.put("inspect", List.of("inspect", "look", "check", "idle"));
+        DEFAULT_NAMES.put("inspect", List.of("inspect", "look", "check"));
     }
 
     /** Which clip an animation name belongs to. Keywords come from guns.yml `anim-names:` (per gun), then config
      *  `anim.names`, then the built-in defaults; an exact name match wins over a substring match. */
+    /** How well an animation name matches its clip: 1000 = exact keyword, else the matched keyword's length, 0 = none. */
+    private int clipScore(String animName) {
+        String n = animName.toLowerCase(Locale.ROOT).trim();
+        Map<String, List<String>> table = new LinkedHashMap<>(DEFAULT_NAMES);
+        org.bukkit.configuration.ConfigurationSection cfg = plugin.getConfig().getConfigurationSection("anim.names");
+        if (cfg != null) for (String clip : cfg.getKeys(false)) table.put(clip, lower(cfg.getStringList(clip)));
+        if (currentGun != null && currentGun.animNames() != null)
+            for (String clip : currentGun.animNames().getKeys(false)) table.put(clip, lower(currentGun.animNames().getStringList(clip)));
+        int best = 0;
+        for (var e : table.entrySet()) {
+            if (n.equals(e.getKey())) return 2000;            // named exactly like the clip ("inspect"): always wins
+            for (String k : e.getValue()) {
+                if (n.equals(k)) best = Math.max(best, 1000);
+                else if (!k.isEmpty() && n.contains(k)) best = Math.max(best, k.length());
+            }
+        }
+        return best;
+    }
+
     private String clipKey(String animName) {
         String n = animName.toLowerCase(Locale.ROOT).trim();
         Map<String, List<String>> table = new LinkedHashMap<>(DEFAULT_NAMES);
@@ -1154,6 +1269,7 @@ public final class PackGenerator {
         if (cfg != null) for (String clip : cfg.getKeys(false)) table.put(clip, lower(cfg.getStringList(clip)));
         if (currentGun != null && currentGun.animNames() != null)
             for (String clip : currentGun.animNames().getKeys(false)) table.put(clip, lower(currentGun.animNames().getStringList(clip)));
+        if (table.containsKey(n)) return n;                                                   // "inspect" is inspect, full stop
         for (var e : table.entrySet()) for (String k : e.getValue()) if (n.equals(k)) return e.getKey();
         String bestClip = null; int bestLen = 0;
         for (var e : table.entrySet()) for (String k : e.getValue()) if (!k.isEmpty() && n.contains(k) && k.length() > bestLen) { bestLen = k.length(); bestClip = e.getKey(); }
@@ -1538,10 +1654,18 @@ public final class PackGenerator {
             part.written = true;
             double[] shift = {8 - part.pivot[0], 8 - part.pivot[1], 8 - part.pivot[2]};
             // extents after the shift -> fit factor k around the centre
+            // extents from the corners AS THEY WILL BE WRITTEN (the cube's exact 90-degree part applied about its
+            // origin): a cube rotated 90 deg around a far pivot ends up somewhere else entirely, and a model with one
+            // coordinate outside the Java range is rejected by the client as a whole (purple cube).
             double far = 0;
-            for (Cube c : part.cubes) for (int i = 0; i < 3; i++) {
-                far = Math.max(far, Math.abs(c.from[i] - c.inflate + shift[i] - 8));
-                far = Math.max(far, Math.abs(c.to[i] + c.inflate + shift[i] - 8));
+            for (Cube c : part.cubes) {
+                int[][] Pe = part.soloCube == c ? identityPerm() : nearestPerm(rot3(c.rotation));
+                for (int corner = 0; corner < 8; corner++) {
+                    double[] v = { ((corner & 1) == 0 ? c.from[0] - c.inflate : c.to[0] + c.inflate) - c.origin[0],
+                                   ((corner & 2) == 0 ? c.from[1] - c.inflate : c.to[1] + c.inflate) - c.origin[1],
+                                   ((corner & 4) == 0 ? c.from[2] - c.inflate : c.to[2] + c.inflate) - c.origin[2] };
+                    for (int i = 0; i < 3; i++) far = Math.max(far, Math.abs(Pe[i][0]*v[0]+Pe[i][1]*v[1]+Pe[i][2]*v[2] + c.origin[i] + shift[i] - 8));
+                }
             }
             part.k = far > 23.9 ? 23.9 / far : 1.0;
             JsonArray elements = new JsonArray();
@@ -1562,6 +1686,7 @@ public final class PackGenerator {
                     double[] w = { Pe[0][0]*v[0]+Pe[0][1]*v[1]+Pe[0][2]*v[2] + c.origin[0], Pe[1][0]*v[0]+Pe[1][1]*v[1]+Pe[1][2]*v[2] + c.origin[1], Pe[2][0]*v[0]+Pe[2][1]*v[1]+Pe[2][2]*v[2] + c.origin[2] };
                     for (int i = 0; i < 3; i++) { double q = 8 + (w[i] + shift[i] - 8) * part.k; lo[i] = Math.min(lo[i], q); hi[i] = Math.max(hi[i], q); }
                 }
+                for (int i = 0; i < 3; i++) { lo[i] = Math.max(-16, Math.min(32, lo[i])); hi[i] = Math.max(-16, Math.min(32, hi[i])); }
                 JsonObject e = new JsonObject();
                 e.add("from", arr(lo));
                 e.add("to", arr(hi));
@@ -1573,7 +1698,17 @@ public final class PackGenerator {
                     e.add("rotation", rotation);
                 }
                 if (c.flash) e.addProperty("shade", false);
-                JsonObject cfaces = remapFaces(c.faces, Pe);
+                JsonObject srcFaces = c.faces;
+                if (c.tint < 0 && part.variant != 4) {
+                    boolean needBox = c.boxUv;
+                    if (!needBox) for (String f : FACE) if (srcFaces.has(f) && srcFaces.get(f).isJsonObject() && !srcFaces.getAsJsonObject(f).has("uv")) needBox = true;
+                    if (needBox) {
+                        boolean anyUv = false;
+                        for (String f : FACE) if (srcFaces.has(f) && srcFaces.get(f).isJsonObject() && srcFaces.getAsJsonObject(f).has("uv")) anyUv = true;
+                        if (!anyUv) srcFaces = boxUvFaces(c, srcFaces);
+                    }
+                }
+                JsonObject cfaces = remapFaces(srcFaces, Pe);
                 JsonObject faces = new JsonObject();
                 for (String f : FACE) {
                     if (!cfaces.has(f)) continue;

@@ -47,7 +47,7 @@ Which animation does what is decided by its **name**:
 | `equip` | equip, draw, deploy, pull, ready | taking the gun out |
 | `inspect` | inspect, look, check, idle | F when the gun is full or nothing can be loaded |
 
-An exact name wins over a "contains" match, so `rel` is reload and `reload_fast` is reload too. Add your own words:
+An exact name wins over a "contains" match, so `rel` is reload and `reload_fast` is reload too. If two animations end up on the same clip, the better-matching name wins and the other is reported (`animation ignored: ...`) - name the one you want exactly `inspect`, `fire`, etc. Add your own words:
 
 - for every gun in `config.yml`:
   ```yaml
@@ -77,7 +77,7 @@ In Blockbench open the animation, add the **Effects** animator and put a **sound
 
 Copy that file to the server as `plugins/Firearms/models/sounds/m4_shot.ogg` (same name as the effect, lower-case). `/firearms pack` adds it to the pack as `firearms:m4_shot` and the plugin plays it at the keyframe time whenever the clip plays. A missing file is reported as a warning.
 
-The gunshot itself (`sound:` / `pitch:` in guns.yml) is a normal Minecraft or pack sound id and does not need a keyframe.
+**Sounds without keyframes.** Every `.ogg` you drop into `plugins/Firearms/models/sounds/` is packed by `/firearms pack` and becomes the sound id `firearms:<file name>` - nothing to edit in the pack by hand. Use those ids in guns.yml: `sound:` (the shot), `reload-sound:`, `equip-sound:`, `empty-sound:`. The pack report lists the packed names.
 
 ## 4a. The inspect animation
 

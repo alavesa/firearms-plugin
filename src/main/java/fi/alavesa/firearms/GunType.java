@@ -36,6 +36,9 @@ public record GunType(
     double drop,            // per-tick downward velocity gain once arching (severity of the arch)
     org.bukkit.configuration.ConfigurationSection animNames, // per-gun animation-name keywords (guns.yml anim-names:)
     org.bukkit.configuration.ConfigurationSection animCfg,   // per-gun clip settings: anim.<clip>.frames, anim.max-frames
+    String reloadSound,     // optional: played when a reload starts (e.g. firearms:ak_reload); "" = default
+    String equipSound,      // optional: played when the gun is drawn
+    String emptySound,      // optional: dry-fire click
     double equipSeconds     // draw time: the equip clip is stretched/compressed to this and the gun can't fire meanwhile (0 = clip length / 0.5 s)
 ) {
     public long shotIntervalMs() { return fireRate <= 0 ? 1000 : Math.round(1000.0 / fireRate); }

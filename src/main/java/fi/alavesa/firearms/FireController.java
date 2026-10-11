@@ -127,7 +127,7 @@ public final class FireController implements Listener {
         int rounds = registry.rounds(item);
         if (rounds <= 0) {
             nextShotAt.put(id, now + 250);
-            p.playSound(p.getLocation(), "minecraft:block.dispenser.fail", 0.8f, 1.6f);
+            p.playSound(p.getLocation(), gun.emptySound() == null || gun.emptySound().isEmpty() ? "minecraft:block.dispenser.fail" : gun.emptySound(), 0.8f, 1.6f);
             return;
         }
         nextShotAt.put(id, now + gun.shotIntervalMs());
@@ -228,7 +228,8 @@ public final class FireController implements Listener {
         final int slot = bestSlot;
         final String uid = uid(item);
         reloadingMag.add(id);
-        p.getWorld().playSound(p.getLocation(), "minecraft:item.crossbow.loading_start", 1f, 1.2f);
+        boolean customReload = gun.reloadSound() != null && !gun.reloadSound().isEmpty();
+        p.getWorld().playSound(p.getLocation(), customReload ? gun.reloadSound() : "minecraft:item.crossbow.loading_start", 1f, customReload ? 1f : 1.2f);
         p.sendActionBar(Component.text("Reloading...", NamedTextColor.YELLOW));
         playClip(p, gun, item, "reload");
         long ticks = Math.max(1, Math.round(gun.reloadSeconds() * 20));
@@ -405,7 +406,8 @@ public final class FireController implements Listener {
             if (registry.gunOf(held) == gun) {
                 clearOffhand(p);
                 refreshArms(p);
-                p.playSound(p.getLocation(), "minecraft:item.armor.equip_chain", 0.5f, 1.5f);
+                boolean customEquip = gun.equipSound() != null && !gun.equipSound().isEmpty();
+                p.playSound(p.getLocation(), customEquip ? gun.equipSound() : "minecraft:item.armor.equip_chain", customEquip ? 1f : 0.5f, customEquip ? 1f : 1.5f);
                 int[] a = registry.anim(gun.model(), "equip");
                 int ticks = gun.equipSeconds() > 0 ? (int) Math.round(gun.equipSeconds() * 20) : a != null ? a[0] * a[1] : 10;
                 drawUntil.put(p.getUniqueId(), plugin.getServer().getCurrentTick() + ticks);
