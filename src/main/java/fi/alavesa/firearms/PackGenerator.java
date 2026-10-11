@@ -63,6 +63,7 @@ public final class PackGenerator {
     private final Map<String, String> fpVariant = new LinkedHashMap<>();        // cmd string -> first-person model path (gun + arms)
     private final Map<String, Integer> fpTints = new LinkedHashMap<>();         // cmd string -> number of arm tint indices
     private final Map<String, String> iconOf = new LinkedHashMap<>();           // cmd string -> flat GUI icon model path
+    private final Map<String, String> cmdKind = new LinkedHashMap<>();          // cmd string -> gun / mag / ammo / ... (which items file)
     private final Map<String, String[]> handVariant = new LinkedHashMap<>();    // cmd string -> [classic path, slim path] (hands modelled in the .bbmodel)
     private final Map<String, int[]> handTints = new LinkedHashMap<>();         // cmd string -> [classic tint count, slim tint count]
     private final Map<String, String[]> skinOrder = new LinkedHashMap<>();      // model -> ["u,v;u,v;...", slim list]
@@ -137,7 +138,12 @@ public final class PackGenerator {
         files.put("assets/" + NS + "/textures/item/muzzle_flash.png", customFlash.exists() ? Files.readAllBytes(customFlash.toPath()) : flashPng());
 
         // items/<base>.json (guns, mags, ammo, crater) and items/<armour>.json (vests): model by custom_model_data string.
-        itemsFile(registry.base().getKey().getKey(), cmdToModel, true);
+        // Guns live on the crossbow (charged = aiming pose), everything else on the plain base item.
+        Map<String, String> gunMap = new LinkedHashMap<>(), restMap = new LinkedHashMap<>();
+        for (var e : cmdToModel.entrySet()) ("gun".equals(cmdKind.get(e.getKey())) ? gunMap : restMap).put(e.getKey(), e.getValue());
+        String gunBase = registry.gunBase().getKey().getKey(), plainBase = registry.base().getKey().getKey();
+        if (gunBase.equals(plainBase)) itemsFile(plainBase, cmdToModel, true);
+        else { itemsFile(gunBase, gunMap, true); itemsFile(plainBase, restMap, false); }
         itemsFile(registry.vestBase().getKey().getKey(), vestCmdToModel, false);
         report.add(0, "Firearms pack report - " + new java.util.Date());
         report.add(1, "custom_model_data string  ->  model path");
@@ -458,6 +464,12 @@ public final class PackGenerator {
 
     private void model(File dir, String name, String kind, Set<String> done) throws IOException {
         if (name == null || name.isEmpty() || !done.add(name)) return;
+        Set<String> before = new java.util.HashSet<>(cmdToModel.keySet());
+        try { modelInner(dir, name, kind, done); }
+        finally { for (String cmd : cmdToModel.keySet()) if (!before.contains(cmd)) cmdKind.put(cmd, kind); }
+    }
+
+    private void modelInner(File dir, String name, String kind, Set<String> done) throws IOException {
         currentGun = null;
         currentName = name;
         if (kind.equals("gun")) for (GunType g : registry.guns()) if (g.model().equals(name)) { currentGun = g; break; }

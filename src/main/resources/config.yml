@@ -4,8 +4,9 @@
 #            RIGHT-click with a MAGAZINE in hand = fill it from loose rounds in your inventory
 #            Sneak      = aim (tighter accuracy, half recoil)
 
-# The vanilla item every gun / magazine / round / crater is built on. The resource pack re-skins it
-# by custom_model_data (see /firearms pack). Pick something with no right-click behaviour of its own.
+# Guns are built on a CROSSBOW kept permanently "charged": in third person that gives the two-handed aiming pose
+# (the bolt is never loosed - the plugin cancels it). Magazines, rounds, casings, craters, grenades use item-base.
+gun-item: CROSSBOW
 item-base: BRICK
 
 # ---- Hold-to-fire detection (AUTO guns) ----

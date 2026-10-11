@@ -374,9 +374,16 @@ public final class Registry {
         return LegacyComponentSerializer.legacyAmpersand().deserialize(legacy).decoration(TextDecoration.ITALIC, false);
     }
 
+    /** The vanilla item guns are built on: a CROSSBOW (kept charged, so the third-person pose is the aiming arms). */
+    public Material gunBase() {
+        try { return Material.valueOf(plugin.getConfig().getString("gun-item", "CROSSBOW").toUpperCase()); }
+        catch (IllegalArgumentException e) { return Material.CROSSBOW; }
+    }
+
     public ItemStack buildGun(GunType gun) {
-        ItemStack item = new ItemStack(base());
+        ItemStack item = new ItemStack(gunBase());
         ItemMeta meta = item.getItemMeta();
+        if (meta instanceof org.bukkit.inventory.meta.CrossbowMeta cb) cb.addChargedProjectile(new ItemStack(Material.ARROW));   // "charged" = aiming pose
         meta.displayName(name(gun.name()));
         List<Component> lore = new ArrayList<>();
         lore.add(Component.text(gun.switchable() ? "SEMI / AUTO - right-click to switch" : gun.auto() ? "AUTO - hold left-click" : "SEMI - one shot per click", NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false));
@@ -440,6 +447,24 @@ public final class Registry {
         meta.getPersistentDataContainer().set(craterKey, PersistentDataType.BYTE, (byte) 1);
         item.setItemMeta(meta);
         return item;
+    }
+
+    /** A gun built on the old base item (brick): rebuild it on the current gun item, keeping its state. */
+    public ItemStack migrateGun(ItemStack old, GunType gun) {
+        if (old == null || old.getType() == gunBase()) return null;
+        ItemStack fresh = buildGun(gun);
+        var from = old.getItemMeta().getPersistentDataContainer();
+        ItemMeta meta = fresh.getItemMeta();
+        var to = meta.getPersistentDataContainer();
+        for (String k : new String[]{"cap", "magtype", "mode", "uid"}) {
+            NamespacedKey key = new NamespacedKey(plugin, k);
+            if (from.has(key, PersistentDataType.STRING)) to.set(key, PersistentDataType.STRING, from.get(key, PersistentDataType.STRING));
+            else if (from.has(key, PersistentDataType.INTEGER)) to.set(key, PersistentDataType.INTEGER, from.get(key, PersistentDataType.INTEGER));
+        }
+        fresh.setItemMeta(meta);
+        int cap = to.getOrDefault(new NamespacedKey(plugin, "cap"), PersistentDataType.INTEGER, gun.magazine());
+        setRounds(fresh, rounds(old), cap);
+        return fresh;
     }
 
     public GunType gunOf(ItemStack it) {

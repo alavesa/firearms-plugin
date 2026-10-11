@@ -472,8 +472,22 @@ public final class FireController implements Listener {
         for (int i = 0; i < inv.getSize(); i++) {
             ItemStack it = inv.getItem(i);
             GunType g = registry.gunOf(it);
-            if (g != null && registry.applySkin(it, g, p)) inv.setItem(i, it);
+            if (g == null) continue;
+            ItemStack migrated = registry.migrateGun(it, g);   // old brick-based guns -> crossbow guns
+            if (migrated != null) { registry.applySkin(migrated, g, p); inv.setItem(i, migrated); continue; }
+            if (registry.applySkin(it, g, p)) inv.setItem(i, it);
         }
+    }
+
+    /** The gun is a charged crossbow for its pose only: it must never actually loose the bolt. */
+    @EventHandler(ignoreCancelled = true)
+    public void onBowShoot(org.bukkit.event.entity.EntityShootBowEvent event) {
+        if (registry.gunOf(event.getBow()) != null) event.setCancelled(true);
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onCrossbowLoad(io.papermc.paper.event.entity.EntityLoadCrossbowEvent event) {
+        if (registry.gunOf(event.getCrossbow()) != null) event.setCancelled(true);
     }
 
     private void cancelClip(Player p) {
