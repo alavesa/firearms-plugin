@@ -98,7 +98,8 @@ public final class PackGenerator {
         for (MagType m : registry.mags()) model(dir, m.model(), "mag", done);
         for (AmmoType a : registry.ammos()) model(dir, a.model(), "ammo", done);
         model(dir, plugin.getConfig().getString("craters.model", "crater"), "crater", done);
-        model(dir, plugin.getConfig().getString("blood.model", "blood"), "blood", done);
+        int bloodVariants = Math.max(1, plugin.getConfig().getInt("blood.variants", 4));
+        for (int i = 1; i <= bloodVariants; i++) model(dir, plugin.getConfig().getString("blood.model", "blood") + "_" + i, "blood", done);
         for (GrenadeType gt : registry.grenades()) model(dir, gt.model(), "grenade", done);
         Set<String> casingModels = new LinkedHashSet<>();
         for (GunType g : registry.guns()) { String c = registry.casingModel(g); if (c != null) casingModels.add(c); }
@@ -481,8 +482,9 @@ public final class PackGenerator {
                 elements.add(cube(new double[]{0, 0, 7.9}, new double[]{16, 16, 8.1}, "#0", new double[]{0, 0, 16, 16}, null));
             }
             case "blood" -> {
-                File custom = new File(dir, name + ".png");
-                byte[] png = custom.exists() ? Files.readAllBytes(custom.toPath()) : bloodPng();
+                File custom = new File(dir, name + ".png");                                   // blood_1.png ...
+                File shared = new File(dir, name.replaceAll("_\\d+$", "") + ".png");         // or one blood.png for all
+                byte[] png = custom.exists() ? Files.readAllBytes(custom.toPath()) : shared.exists() ? Files.readAllBytes(shared.toPath()) : bloodPng(name.hashCode());
                 files.put("assets/" + NS + "/textures/item/" + path(name) + ".png", png);
                 tex.addProperty("0", NS + ":item/" + path(name));
                 tex.addProperty("particle", NS + ":item/" + path(name));
@@ -713,10 +715,10 @@ public final class PackGenerator {
     }
 
     /** A splatter: a few dark-red blobs with drips, transparent elsewhere. */
-    private static byte[] bloodPng() throws IOException {
+    private static byte[] bloodPng(int seed) throws IOException {
         BufferedImage img = new BufferedImage(32, 32, BufferedImage.TYPE_INT_ARGB);
-        java.util.Random r = new java.util.Random(7);
-        double[][] blobs = new double[9][];
+        java.util.Random r = new java.util.Random(seed);
+        double[][] blobs = new double[6 + r.nextInt(6)][];
         for (int i = 0; i < blobs.length; i++) blobs[i] = new double[]{ 10 + r.nextDouble() * 12, 8 + r.nextDouble() * 14, 2 + r.nextDouble() * 5 };
         for (int y = 0; y < 32; y++) for (int x = 0; x < 32; x++) {
             double best = 0;

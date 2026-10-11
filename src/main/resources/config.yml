@@ -67,7 +67,18 @@ blood:
   range: 4.0             # how far behind the victim a wall can be for a splatter
   seconds: 60            # how long a splatter stays
   size: 0.7
-  model: blood           # models/blood.bbmodel or models/blood.png to retexture
+  variants: 4            # blood_1 .. blood_N textures, picked at random (models/blood_1.png... or one blood.png)
+  extra: 2               # extra splatters around the victim per hit (floor + a random direction)
+  model: blood
+# Hit zones: multiplier by where the bullet lands on the hitbox (height fraction). Vests do not cover the head.
+damage:
+  zones:
+    head: 3.0
+    body: 1.0
+    legs: 0.8
+    head-from: 0.75      # top 25 % of the hitbox = head
+    legs-to: 0.4         # bottom 40 % = legs
+    headshot-message: true
 
 # ---- Shell casings ----
 casings:

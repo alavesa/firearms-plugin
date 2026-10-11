@@ -194,6 +194,8 @@ public final class FireController implements Listener {
         GunType gun = registry.gunOf(item);
         if (gun == null) return;
         event.setCancelled(true);
+        Integer du = drawUntil.get(p.getUniqueId());
+        if (du != null && plugin.getServer().getCurrentTick() < du) return;   // still drawing: no reload, no inspect
         boolean started = gun.pumpAction() || !gun.usesMag() ? startPumpReload(p, gun, item) : startMagReload(p, gun, item);
         // Second use of the reload key: full gun or nothing to load -> the "inspect" animation.
         if (!started && !reloadingMag.contains(p.getUniqueId()) && !reloadingPump.contains(p.getUniqueId())) playClip(p, gun, item, "inspect");
@@ -382,6 +384,7 @@ public final class FireController implements Listener {
 
     @EventHandler(ignoreCancelled = true)
     public void onMelee(EntityDamageByEntityEvent event) {
+        if (Ballistics.applyingDamage) return;   // our own bullet / grenade damage, not a punch
         if (event.getCause() != EntityDamageEvent.DamageCause.ENTITY_ATTACK) return;
         if (event.getDamager() instanceof Player p && registry.gunOf(p.getInventory().getItemInMainHand()) != null)
             event.setCancelled(true);   // the bullet does the damage, never the punch

@@ -79,6 +79,12 @@ Copy that file to the server as `plugins/Firearms/models/sounds/m4_shot.ogg` (sa
 
 The gunshot itself (`sound:` / `pitch:` in guns.yml) is a normal Minecraft or pack sound id and does not need a keyframe.
 
+## 4a. The inspect animation
+
+Name an animation `inspect` (or `look`, `check`, `idle`, or your own word under `anim.names.inspect`). It plays when the player presses **F** and nothing can be loaded: the magazine is full, or there is no magazine / no loose round to load. While a reload or the draw animation is running, F does nothing.
+
+Check it is there: `/firearms clips <model>` must list `inspect: N frames x T ticks`. If it does not, the animation name did not match - `/firearms pack` prints a `clips:` line per model showing what was detected.
+
 ## 4b. Grenades
 
 `plugins/Firearms/grenades.yml` defines the grenades (frag, incendiary, smoke by default). Each has a `model:` (`grenade_frag.bbmodel` etc., placeholder if missing) and uses two clips:

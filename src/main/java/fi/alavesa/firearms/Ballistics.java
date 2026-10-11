@@ -45,6 +45,9 @@ import java.util.concurrent.ThreadLocalRandom;
  */
 public final class Ballistics {
 
+    /** True while the plugin itself applies gun/grenade damage - FireController.onMelee must not cancel it. */
+    public static volatile boolean applyingDamage = false;
+
     private final FirearmsPlugin plugin;
     private final Registry registry;
     private final List<Bullet> bullets = new ArrayList<>();
@@ -144,27 +147,34 @@ public final class Ballistics {
             double f = falloff(gun, distance);
             // Shot through a penetrable wall: less damage per layer passed (ballistics.penetration-damage).
             double pen = Math.pow(Math.max(0, Math.min(1, plugin.getConfig().getDouble("ballistics.penetration-damage", 0.9))), hit.penetrations);
-            double amount = gun.damage() * dmgMult * f * pen;
+            String zone = zone(target, hit.point, plugin);
+            double zoneMult = plugin.getConfig().getDouble("damage.zones." + zone, zone.equals("head") ? 3.0 : zone.equals("legs") ? 0.8 : 1.0);
+            double amount = gun.damage() * dmgMult * f * pen * zoneMult;
             if (amount <= 0) return;
-            amount = vestAbsorb(target, amount);
+            if (!zone.equals("head")) amount = vestAbsorb(target, amount);   // a vest covers the body, not the head
             if (amount <= 0.001) return;
             blood(target, hit.point, hit.dir);
-            if (target instanceof Player victim && !plugin.getConfig().getBoolean("damage.hurt-animation", false)) {
-                hurtQuietly(victim, amount, shooter);
-            } else {
-                target.setNoDamageTicks(0);          // fast fire must register every round
-                double hpBefore = target.getHealth();
-                target.damage(amount, shooter);
-                // PvP off (server.properties / world / region): the game cancels player-vs-player damage, so hits
-                // register (sounds, vest) but nothing happens. Force it through as source-less damage.
-                if (target instanceof Player && !target.isDead() && target.getHealth() >= hpBefore - 0.001
-                    && plugin.getConfig().getBoolean("bypass-pvp", true)) {
-                    target.setNoDamageTicks(0);
-                    target.damage(amount);
+            applyingDamage = true;
+            try {
+                if (target instanceof Player victim && !plugin.getConfig().getBoolean("damage.hurt-animation", false)) {
+                    hurtQuietly(victim, amount, shooter);
+                } else {
+                    target.setNoDamageTicks(0);          // fast fire must register every round
+                    double hpBefore = target.getHealth();
+                    target.damage(amount, shooter);
+                    // PvP off (server.properties / world / region): the game cancels player-vs-player damage, so hits
+                    // register (sounds, vest) but nothing happens. Force it through as source-less damage.
+                    if (!target.isDead() && target.getHealth() >= hpBefore - 0.001 && plugin.getConfig().getBoolean("bypass-pvp", true)) {
+                        target.setNoDamageTicks(0);
+                        target.damage(amount);
+                    }
                 }
+            } finally { applyingDamage = false; }
+            if (shooter != null && shooter.isOnline()) {
+                shooter.playSound(shooter.getLocation(), "minecraft:entity.arrow.hit_player", 0.6f, zone.equals("head") ? 1.9f : 1.4f);
+                if (zone.equals("head") && plugin.getConfig().getBoolean("damage.zones.headshot-message", true))
+                    shooter.sendActionBar(net.kyori.adventure.text.Component.text("Headshot!", net.kyori.adventure.text.format.NamedTextColor.GOLD));
             }
-            if (shooter != null && shooter.isOnline())
-                shooter.playSound(shooter.getLocation(), "minecraft:entity.arrow.hit_player", 0.6f, 1.4f);
         } else if (hit.block != null) {
             World w = hit.block.getWorld();
             w.spawnParticle(Particle.BLOCK, hit.point, 6, 0.05, 0.05, 0.05, 0.02, hit.block.getBlockData());
@@ -197,15 +207,32 @@ public final class Ballistics {
     /** Blood: a burst of red particles at the wound and a splatter decal on the wall behind the target. */
     private void blood(LivingEntity target, Location wound, Vector dir) {
         if (!plugin.getConfig().getBoolean("blood.enabled", true) || dir == null) return;
+        if (target instanceof org.bukkit.entity.ArmorStand || vehicleLike(target)) return;   // only living flesh bleeds
         World w = target.getWorld();
         w.spawnParticle(Particle.BLOCK, wound, 14, 0.15, 0.2, 0.15, 0.08, Material.REDSTONE_BLOCK.createBlockData());
         double range = plugin.getConfig().getDouble("blood.range", 4.0);
-        RayTraceResult wall = w.rayTraceBlocks(wound, dir, range, FluidCollisionMode.NEVER, true);
+        splat(w, wound, dir, range);
+        // extra splatters around the victim: the floor under them and a random direction, for variety
+        var rnd = ThreadLocalRandom.current();
+        int extra = plugin.getConfig().getInt("blood.extra", 2);
+        for (int i = 0; i < extra; i++) {
+            Location from = target.getLocation().add(rnd.nextDouble() * 1.2 - 0.6, 0.6 + rnd.nextDouble() * 0.8, rnd.nextDouble() * 1.2 - 0.6);
+            Vector d = i == 0 ? new Vector(rnd.nextDouble() * 0.6 - 0.3, -1, rnd.nextDouble() * 0.6 - 0.3) : new Vector(rnd.nextDouble() * 2 - 1, rnd.nextDouble() * 0.6 - 0.5, rnd.nextDouble() * 2 - 1);
+            if (d.lengthSquared() < 1e-4) continue;
+            splat(w, from, d.normalize(), i == 0 ? 2.5 : range);
+        }
+    }
+
+    /** One splatter decal on the first wall/floor along dir, with a random texture variant and size. */
+    private void splat(World w, Location from, Vector dir, double range) {
+        RayTraceResult wall = w.rayTraceBlocks(from, dir, range, FluidCollisionMode.NEVER, true);
         if (wall == null || wall.getHitBlock() == null || wall.getHitBlockFace() == null) return;
         if (passable(wall.getHitBlock().getType()) && ignore.contains(wall.getHitBlock().getType())) return;
-        double sz = plugin.getConfig().getDouble("blood.size", 0.7) * (0.7 + ThreadLocalRandom.current().nextDouble() * 0.6);
-        decal(wall.getHitBlock(), wall.getHitPosition().toLocation(w), wall.getHitBlockFace(), plugin.getConfig().getString("blood.model", "blood"),
-            (float) sz, plugin.getConfig().getDouble("blood.seconds", 60));
+        var rnd = ThreadLocalRandom.current();
+        int variants = Math.max(1, plugin.getConfig().getInt("blood.variants", 4));
+        String model = plugin.getConfig().getString("blood.model", "blood") + "_" + (1 + rnd.nextInt(variants));
+        double sz = plugin.getConfig().getDouble("blood.size", 0.7) * (0.6 + rnd.nextDouble() * 0.8);
+        decal(wall.getHitBlock(), wall.getHitPosition().toLocation(w), wall.getHitBlockFace(), model, (float) sz, plugin.getConfig().getDouble("blood.seconds", 60));
     }
 
     /** A worn vest soaks its share of the bullet into its durability; the rest reaches the wearer. */
@@ -301,14 +328,36 @@ public final class Ballistics {
 
     /** A hit on an Interaction hitbox (custom-model mobs) is credited to the nearest living non-player it belongs to. */
     private static LivingEntity owner(Entity hit, Player shooter) {
-        if (hit instanceof LivingEntity le) return le;
+        if (hit instanceof LivingEntity le) return vehicleLike(le) ? null : le;
         LivingEntity best = null; double bd = 9;
         for (Entity e : hit.getNearbyEntities(3, 3, 3)) {
-            if (!(e instanceof LivingEntity le) || e instanceof Player || e == shooter || e.isDead() || e instanceof org.bukkit.entity.ArmorStand) continue;
+            if (!(e instanceof LivingEntity le) || e instanceof Player || e == shooter || e.isDead() || e instanceof org.bukkit.entity.ArmorStand || vehicleLike(le)) continue;
             double d = e.getLocation().distanceSquared(hit.getLocation());
             if (d < bd) { bd = d; best = le; }
         }
         return best;
+    }
+
+    /** Cars and other machinery: boats/minecarts, the invisible physics mobs car plugins ride on, anything tagged as a
+     *  vehicle part. They are not shot, do not bleed and do not count as "a player was hit". */
+    private static boolean vehicleLike(Entity e) {
+        if (e instanceof org.bukkit.entity.Vehicle) return true;
+        if (e instanceof LivingEntity le && !(e instanceof Player) && le.isInvisible()) return true;
+        for (String t : e.getScoreboardTags()) {
+            String l = t.toLowerCase();
+            if (l.contains("car") || l.contains("vehicle") || l.contains("seat") || l.contains("_part") || l.contains("aimlock")) return true;
+        }
+        return false;
+    }
+
+    /** Where on the body the bullet landed: head / body / legs by height fraction of the hitbox. */
+    private static String zone(LivingEntity target, Location point, FirearmsPlugin plugin) {
+        double h = target.getHeight();
+        if (h < 1.2) return "body";
+        double frac = (point.getY() - target.getLocation().getY()) / h;
+        if (frac >= plugin.getConfig().getDouble("damage.zones.head-from", 0.75)) return "head";
+        if (frac <= plugin.getConfig().getDouble("damage.zones.legs-to", 0.4)) return "legs";
+        return "body";
     }
 
     /** Muzzle point in the world for this shot: eye + right/up/forward offsets from the gun. */

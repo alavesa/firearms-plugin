@@ -223,8 +223,11 @@ public final class Grenades implements Listener {
                     if (amount <= 0.5) continue;
                     le.setNoDamageTicks(0);
                     double hp = le.getHealth();
-                    le.damage(amount, t.thrower);
-                    if (le instanceof Player && !le.isDead() && le.getHealth() >= hp - 0.001 && plugin.getConfig().getBoolean("bypass-pvp", true)) { le.setNoDamageTicks(0); le.damage(amount); }
+                    Ballistics.applyingDamage = true;
+                    try {
+                        le.damage(amount, t.thrower);
+                        if (!le.isDead() && le.getHealth() >= hp - 0.001 && plugin.getConfig().getBoolean("bypass-pvp", true)) { le.setNoDamageTicks(0); le.damage(amount); }
+                    } finally { Ballistics.applyingDamage = false; }
                     le.setVelocity(le.getVelocity().add(to.normalize().multiply(0.6 * (1 - d / t.type.radius())).setY(0.25)));
                 }
             }
