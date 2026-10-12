@@ -193,8 +193,12 @@ anim:
     equip:   [equip, draw, deploy, pull, ready]
     pump:    [pump, rack, cock, bolt, cycle]
     inspect: [inspect, look, check]   # (not "idle": an idle animation would steal the inspect clip)
-  # If the baked whole-gun (root bone) motion comes out mirrored in first person, flip the sign per axis here.
-  root-rotation-sign: [1, 1, 1]
+  # Animation channel signs relative to the rest pose. Default "auto": Blockbench 4.x files (format_version 4.*) use
+  # rotation [-1,-1,1] and position [-1,1,1] (keyframes are stored in the Bedrock convention), Blockbench 5 files [1,1,1].
+  # Override with explicit lists if a model still animates mirrored:
+  # rotation-sign: [-1, -1, 1]
+  # position-sign: [-1, 1, 1]
+  root-rotation-sign: [1, 1, 1]   # (baked mode only) extra flips for the whole-gun motion
   root-position-sign: [1, 1, 1]
 
 # ---- Resource pack generator ----

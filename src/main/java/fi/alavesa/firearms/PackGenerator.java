@@ -71,6 +71,9 @@ public final class PackGenerator {
     private final Map<String, List<List<Object[]>>> compositeParts = new LinkedHashMap<>();
     private final Map<String, List<String>> soundEvents = new LinkedHashMap<>();// sound event -> files
     private GunType currentGun;
+    /** Animation channel signs relative to the rest pose for the CURRENT file: Blockbench 4.x files keep keyframes in the
+     *  Bedrock convention (rotation X,Y and position X inverted vs. the group's rest values); Blockbench 5 files do not. */
+    private double[] animRotSign = {1, 1, 1}, animPosSign = {1, 1, 1};
     private final List<String> report = new ArrayList<>();
 
     /** A resource-location-safe path for a model name. Minecraft rejects the WHOLE items file if any case
@@ -816,6 +819,14 @@ public final class PackGenerator {
         JsonObject root = JsonParser.parseString(Files.readString(bb.toPath())).getAsJsonObject();
         final String mpath = path(name);
         int meshes = 0;
+        int formatMajor = 4;
+        if (root.has("meta") && root.getAsJsonObject("meta").has("format_version")) {
+            try { formatMajor = Integer.parseInt(str(root.getAsJsonObject("meta").get("format_version"), "4").split("\\.")[0].trim()); } catch (NumberFormatException ignored) { }
+        }
+        animRotSign = signConfig("anim.rotation-sign", formatMajor >= 5 ? new double[]{1, 1, 1} : new double[]{-1, -1, 1});
+        animPosSign = signConfig("anim.position-sign", formatMajor >= 5 ? new double[]{1, 1, 1} : new double[]{-1, 1, 1});
+        if (root.has("animations") && root.get("animations").isJsonArray() && root.getAsJsonArray("animations").size() > 0)
+            report.add(name + ": Blockbench format " + formatMajor + ".x - animation rotation sign " + java.util.Arrays.toString(animRotSign) + ", position sign " + java.util.Arrays.toString(animPosSign));
         if (!mpath.equals(name)) warnings.add("'" + name + "' is not a valid model path - files written as '" + mpath + "' (the custom_model_data string stays '" + name + "')");
         double resW = 16, resH = 16;
         if (root.has("resolution")) {
@@ -1432,6 +1443,7 @@ public final class PackGenerator {
             double[] r = b.rotation.clone(), p = {0, 0, 0};
             if (clip != null) {
                 double[] ar = sample(clip.rot.get(b.uuid), t), ap = sample(clip.pos.get(b.uuid), t);
+                for (int i = 0; i < 3; i++) { ar[i] *= animRotSign[i]; ap[i] *= animPosSign[i]; }
                 if (b == rootBone) { rootRot = ar; rootPos = new double[]{ap[0] * scale, ap[1] * scale, ap[2] * scale}; }
                 else for (int i = 0; i < 3; i++) { r[i] += ar[i]; p[i] += ap[i] * scale; }
             }
@@ -1554,6 +1566,12 @@ public final class PackGenerator {
         }
         model.add("display", disp);
         return model;
+    }
+
+    /** "auto" (default) = by the file's Blockbench version; or an explicit [x, y, z] list of 1 / -1 in config.yml. */
+    private double[] signConfig(String key, double[] auto) {
+        List<Double> l = plugin.getConfig().getDoubleList(key);
+        return l.size() == 3 ? new double[]{ l.get(0), l.get(1), l.get(2) } : auto;
     }
 
     private double[] sign(String key) {
@@ -1763,7 +1781,7 @@ public final class PackGenerator {
             double[] r = b.rotation.clone(), p = {0, 0, 0};
             if (clip != null) {
                 double[] ar = sample(clip.rot.get(b.uuid), t), ap = sample(clip.pos.get(b.uuid), t);
-                for (int i = 0; i < 3; i++) { r[i] += ar[i]; p[i] += ap[i] * scale; }
+                for (int i = 0; i < 3; i++) { r[i] += ar[i] * animRotSign[i]; p[i] += ap[i] * animPosSign[i] * scale; }
             }
             double[][] local = mul(mul(translate(b.origin[0] + p[0], b.origin[1] + p[1], b.origin[2] + p[2]), rotZYX(r)), translate(-b.origin[0], -b.origin[1], -b.origin[2]));
             w = b.parent == null ? local : mul(world(b.parent, clip, t, cache), local);
