@@ -110,6 +110,17 @@ arms:
   right: { enabled: true,  pos: [10.5, 1, 11.5], rotation: [-45, 0, 0] }
   left:  { enabled: false, pos: [5.5, 3, 4],      rotation: [-45, 0, 22.5] }
 
+# ---- First-person position of the gun models ----
+# Where a gun sits on the screen = its display transform (Blockbench's Display tab "First Person Right" values, also
+# guns.yml display:). Set it in game with  /firearms pose <gun> offset <x> <y> <z>   (model pixels: +x = right,
+# +y = up, +z = towards you),  /firearms pose <gun> rotate <x> <y> <z>  (degrees),  /firearms pose <gun> scale <s>;
+# "~" keeps a value, "~2" adds 2. They are saved to guns.yml and the pack is rebuilt (re-apply the new pack).
+display:
+  # Minecraft draws every CHARGED crossbow in first person 0.64 blocks to the left and turned 10 degrees (the
+  # vanilla crossbow aiming pose). This folds the exact inverse into the gun models, so the display values mean
+  # the same place they did on the brick base. Turn off if you set your display values with that pose included.
+  crossbow-compensate: true
+
 # ---- Stat sheet in the gun's description (0-10 bars; 10 = these maxima) ----
 stats:
   max:

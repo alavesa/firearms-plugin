@@ -976,6 +976,8 @@ public final class PackGenerator {
                 display.add(key, transform(r, tr, sc));
             }
         }
+        if (currentGun != null && registry.gunBase() == org.bukkit.Material.CROSSBOW && plugin.getConfig().getBoolean("display.crossbow-compensate", true))
+            compensateCrossbowPose(display);
         double[] flashAt = flashSpot(name, cubes);
 
         // --- rest model
@@ -1856,6 +1858,26 @@ public final class PackGenerator {
         double x = Math.atan2(-m[1][2], m[2][2]);
         double z = Math.atan2(-m[0][1], m[0][0]);
         return new double[]{ Math.toDegrees(x), Math.toDegrees(y), Math.toDegrees(z) };
+    }
+
+    /** The client renders a CHARGED crossbow in first person shifted 0.641864 blocks to the hand's outside and turned
+     *  10 degrees about Y (FirstPersonHandsAndItemsRenderer, verified from the 26.3 client), which put every gun on the
+     *  player's left when guns became crossbows. This folds the inverse of that pose into the first-person display
+     *  transform so the gun sits exactly where its display values say (as it did on the brick base):
+     *  T(c) Ry(th) T(t') R(r') = T(t) R(r)  =>  t' = Ry(-th)(t - c), r' = euler(Ry(-th) R(r)).
+     *  The left hand is the mirror image on both sides, so the same values serve firstperson_lefthand. */
+    private static void compensateCrossbowPose(JsonObject display) {
+        final double cx = -0.641864 * 16, th = 10.0;
+        double[][] inv = rotXYZ(new double[]{0, -th, 0});
+        for (String hand : new String[]{"firstperson_righthand", "firstperson_lefthand"}) {
+            JsonObject h = display.has(hand) ? display.getAsJsonObject(hand) : transform(new double[]{0, 0, 0}, new double[]{0, 0, 0}, new double[]{1, 1, 1});
+            double[] r = vec(h.get("rotation")), t = vec(h.get("translation")), sc = vec(h.get("scale"));
+            double[] d = { t[0] - cx, t[1], t[2] };
+            double[] t2 = new double[3];
+            for (int i = 0; i < 3; i++) t2[i] = inv[i][0] * d[0] + inv[i][1] * d[1] + inv[i][2] * d[2];
+            double[] r2 = eulerXYZ(mul3(inv, rotXYZ(r)));
+            display.add(hand, transform(r2, new double[]{clamp80(t2[0]), clamp80(t2[1]), clamp80(t2[2])}, sc));
+        }
     }
 
     private static JsonObject displayFrom(JsonObject bbDisplay, double comp) {

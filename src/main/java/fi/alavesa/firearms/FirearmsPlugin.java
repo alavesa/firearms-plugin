@@ -134,34 +134,12 @@ public final class FirearmsPlugin extends JavaPlugin {
             }
             case "pack", "check" -> {
                 if (!sender.hasPermission("firearms.admin")) return deny(sender);
-                boolean dry = args[0].equalsIgnoreCase("check");
-                if (packRunning) { sender.sendMessage(Component.text("A pack build is already running.", NamedTextColor.YELLOW)); return true; }
-                packRunning = true;
-                sender.sendMessage(Component.text(dry ? "Checking models..." : "Building the pack in the background (the server keeps running)...", NamedTextColor.GRAY));
-                // Off the main thread: big models x many animation frames took long enough to freeze the server and
-                // time players out. The generator only reads immutable gun data + config, so this is safe.
-                getServer().getScheduler().runTaskAsynchronously(this, () -> {
-                    PackGenerator.Result r = null; Exception err = null;
-                    try { r = new PackGenerator(this, registry, dry).generate(); } catch (Exception ex) { err = ex; }
-                    final PackGenerator.Result res = r; final Exception e = err;
-                    getServer().getScheduler().runTask(this, () -> {
-                        packRunning = false;
-                        if (e != null) {
-                            sender.sendMessage(Component.text("Pack generation failed: " + e, NamedTextColor.RED));
-                            getLogger().warning("Pack generation failed: " + e);
-                            return;
-                        }
-                        if (!dry) registry.load();
-                        sender.sendMessage(Component.text((dry ? "Check done" : "Pack written: " + res.zip().getPath()) + "  (" + res.millis() + " ms, " + (res.bytes() / 1024) + " KB uncompressed)", NamedTextColor.GREEN));
-                        sender.sendMessage(Component.text(res.models() + " .bbmodel converted, " + res.frames() + " animation frames baked, "
-                            + res.placeholders() + " placeholder model(s)", NamedTextColor.GRAY));
-                        if (!res.biggest().isEmpty()) sender.sendMessage(Component.text("Biggest: " + String.join(", ", res.biggest()), NamedTextColor.DARK_GRAY));
-                        for (String nte : res.notes()) sender.sendMessage(Component.text(nte, NamedTextColor.GRAY));
-                        for (String w : res.warnings()) sender.sendMessage(Component.text("! " + w, NamedTextColor.YELLOW));
-                        if (!dry) sender.sendMessage(Component.text("Now upload/apply the NEW Firearms-pack.zip - an old pack with this new index shows purple frames while firing.", NamedTextColor.YELLOW));
-                    });
-                });
+                buildPack(sender, args[0].equalsIgnoreCase("check"));
                 return true;
+            }
+            case "pose", "offset", "position" -> {
+                if (!sender.hasPermission("firearms.admin")) return deny(sender);
+                return pose(sender, args);
             }
             case "models" -> {
                 File dir = new File(getDataFolder(), "models");
@@ -205,6 +183,86 @@ public final class FirearmsPlugin extends JavaPlugin {
         }
     }
 
+
+    /** /firearms pack (check = dry run), in the background. */
+    private void buildPack(CommandSender sender, boolean dry) {
+                if (packRunning) { sender.sendMessage(Component.text("A pack build is already running.", NamedTextColor.YELLOW)); return; }
+                packRunning = true;
+                sender.sendMessage(Component.text(dry ? "Checking models..." : "Building the pack in the background (the server keeps running)...", NamedTextColor.GRAY));
+                // Off the main thread: big models x many animation frames took long enough to freeze the server and
+                // time players out. The generator only reads immutable gun data + config, so this is safe.
+                getServer().getScheduler().runTaskAsynchronously(this, () -> {
+                    PackGenerator.Result r = null; Exception err = null;
+                    try { r = new PackGenerator(this, registry, dry).generate(); } catch (Exception ex) { err = ex; }
+                    final PackGenerator.Result res = r; final Exception e = err;
+                    getServer().getScheduler().runTask(this, () -> {
+                        packRunning = false;
+                        if (e != null) {
+                            sender.sendMessage(Component.text("Pack generation failed: " + e, NamedTextColor.RED));
+                            getLogger().warning("Pack generation failed: " + e);
+                            return;
+                        }
+                        if (!dry) registry.load();
+                        sender.sendMessage(Component.text((dry ? "Check done" : "Pack written: " + res.zip().getPath()) + "  (" + res.millis() + " ms, " + (res.bytes() / 1024) + " KB uncompressed)", NamedTextColor.GREEN));
+                        sender.sendMessage(Component.text(res.models() + " .bbmodel converted, " + res.frames() + " animation frames baked, "
+                            + res.placeholders() + " placeholder model(s)", NamedTextColor.GRAY));
+                        if (!res.biggest().isEmpty()) sender.sendMessage(Component.text("Biggest: " + String.join(", ", res.biggest()), NamedTextColor.DARK_GRAY));
+                        for (String nte : res.notes()) sender.sendMessage(Component.text(nte, NamedTextColor.GRAY));
+                        for (String w : res.warnings()) sender.sendMessage(Component.text("! " + w, NamedTextColor.YELLOW));
+                        if (!dry) sender.sendMessage(Component.text("Now upload/apply the NEW Firearms-pack.zip - an old pack with this new index shows purple frames while firing.", NamedTextColor.YELLOW));
+                    });
+                });
+    }
+
+    /** /firearms pose <gun> [offset|rotate|scale [x y z]] - first-person position of the gun model, saved to guns.yml
+     *  display.firstperson_righthand (+ lefthand), then the pack is rebuilt. "~" keeps a value, "~2" adds 2. */
+    private boolean pose(CommandSender sender, String[] args) {
+        if (args.length < 2) { sender.sendMessage(Component.text("/firearms pose <gun> offset <x> <y> <z> | rotate <x> <y> <z> | scale <s>   (model px / degrees; ~ = keep, ~2 = add 2)", NamedTextColor.YELLOW)); return true; }
+        GunType g = registry.gun(args[1].toLowerCase());
+        if (g == null) { sender.sendMessage(Component.text("Unknown gun: " + args[1] + " (" + String.join(", ", registry.gunIds()) + ")", NamedTextColor.RED)); return true; }
+        File gf = new File(getDataFolder(), "guns.yml");
+        org.bukkit.configuration.file.YamlConfiguration y = org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(gf);
+        String base = "guns." + g.id() + ".display.firstperson_righthand.";
+        double[] tr = vec3(y, base + "translation", new double[]{0, 0, 0}), rot = vec3(y, base + "rotation", new double[]{0, 0, 0}), sc = vec3(y, base + "scale", new double[]{1, 1, 1});
+        if (args.length < 3) {
+            sender.sendMessage(Component.text(g.id() + " first person: offset " + fmt(tr) + "  rotate " + fmt(rot) + "  scale " + fmt(sc)
+                + (y.contains(base + "translation") || y.contains(base + "rotation") || y.contains(base + "scale") ? "" : "  (not set: the .bbmodel's own Display values are used)"), NamedTextColor.GOLD));
+            return true;
+        }
+        String what = args[2].toLowerCase();
+        try {
+            switch (what) {
+                case "offset", "position", "translation", "move" -> { if (args.length < 6) return poseUsage(sender); for (int i = 0; i < 3; i++) tr[i] = Math.max(-80, Math.min(80, rel(args[3 + i], tr[i]))); y.set(base + "translation", list(tr)); }
+                case "rotate", "rotation", "rot" -> { if (args.length < 6) return poseUsage(sender); for (int i = 0; i < 3; i++) rot[i] = rel(args[3 + i], rot[i]); y.set(base + "rotation", list(rot)); }
+                case "scale", "size" -> { if (args.length < 4) return poseUsage(sender); double v = Math.max(0.05, Math.min(4, rel(args[3], sc[0]))); sc = new double[]{v, v, v}; y.set(base + "scale", list(sc)); }
+                case "reset", "clear" -> { y.set("guns." + g.id() + ".display", null); }
+                default -> { return poseUsage(sender); }
+            }
+        } catch (NumberFormatException ex) { sender.sendMessage(Component.text("Numbers please: " + ex.getMessage(), NamedTextColor.RED)); return true; }
+        if (!what.equals("reset") && !what.equals("clear")) {
+            // the left hand is the mirror image: same values
+            for (String k : new String[]{"translation", "rotation", "scale"}) if (y.contains(base + k)) y.set("guns." + g.id() + ".display.firstperson_lefthand." + k, y.get(base + k));
+        }
+        try { y.save(gf); } catch (java.io.IOException ex) { sender.sendMessage(Component.text("Could not write guns.yml: " + ex.getMessage(), NamedTextColor.RED)); return true; }
+        registry.load();
+        sender.sendMessage(Component.text(g.id() + " first person: offset " + fmt(tr) + "  rotate " + fmt(rot) + "  scale " + fmt(sc) + "  -> saved to guns.yml", NamedTextColor.GREEN));
+        buildPack(sender, false);
+        return true;
+    }
+
+    private boolean poseUsage(CommandSender s) { s.sendMessage(Component.text("/firearms pose <gun> offset <x> <y> <z> | rotate <x> <y> <z> | scale <s> | reset", NamedTextColor.YELLOW)); return true; }
+    private static double rel(String a, double cur) {
+        if (a.equals("~")) return cur;
+        if (a.startsWith("~")) return cur + Double.parseDouble(a.substring(1).replace(',', '.'));
+        return Double.parseDouble(a.replace(',', '.'));
+    }
+    private static double[] vec3(org.bukkit.configuration.ConfigurationSection y, String path, double[] def) {
+        List<Double> l = y.getDoubleList(path);
+        return l.size() == 3 ? new double[]{l.get(0), l.get(1), l.get(2)} : def.clone();
+    }
+    private static List<Double> list(double[] v) { return List.of(Math.round(v[0] * 100) / 100.0, Math.round(v[1] * 100) / 100.0, Math.round(v[2] * 100) / 100.0); }
+    private static String fmt(double[] v) { return "[" + Math.round(v[0] * 100) / 100.0 + ", " + Math.round(v[1] * 100) / 100.0 + ", " + Math.round(v[2] * 100) / 100.0 + "]"; }
+
     private Component line(File dir, String model, String what) {
         boolean has = new File(dir, model + ".bbmodel").exists();
         return Component.text("  " + model + ".bbmodel ", has ? NamedTextColor.GREEN : NamedTextColor.RED)
@@ -216,13 +274,18 @@ public final class FirearmsPlugin extends JavaPlugin {
 
     private boolean usage(CommandSender s) {
         s.sendMessage(Component.text("Firearms v" + getPluginMeta().getVersion() + (duplicateJars != null ? "  (WARNING: several jars: " + duplicateJars + ")" : ""), NamedTextColor.GOLD));
-        s.sendMessage(Component.text("/firearms list | give <gun|mag|ammo|vest|grenade> [amount] [player] | models | pack | check | clips <model> | reload | version", NamedTextColor.YELLOW));
+        s.sendMessage(Component.text("/firearms list | give <gun|mag|ammo|vest|grenade> [amount] [player] | pose <gun> offset|rotate|scale ... | models | pack | check | clips <model> | reload | version", NamedTextColor.YELLOW));
         return true;
     }
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        if (args.length == 1) return filter(Stream.of("list", "give", "models", "pack", "check", "clips", "reload", "version"), args[0]);
+        if (args.length == 1) return filter(Stream.of("list", "give", "pose", "models", "pack", "check", "clips", "reload", "version"), args[0]);
+        if (args[0].equalsIgnoreCase("pose")) {
+            if (args.length == 2) return filter(registry.gunIds().stream(), args[1]);
+            if (args.length == 3) return filter(Stream.of("offset", "rotate", "scale", "reset"), args[2]);
+            if (args.length >= 4 && args.length <= 6) return List.of("~", "0");
+        }
         if (args.length == 2 && args[0].equalsIgnoreCase("give")) {
             List<String> ids = new ArrayList<>(registry.gunIds());
             ids.addAll(registry.magIds());
