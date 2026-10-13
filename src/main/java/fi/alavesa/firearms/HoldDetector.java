@@ -55,8 +55,19 @@ public final class HoldDetector {
     }
 
     /** Every tick: maintain each auto-gun holder's client-side barrier cluster. */
+    /** A gun in the off-hand (creative drag, another plugin, a command) goes back into the inventory - never deleted. */
+    public static void bounceOffhandGun(Player p, Registry registry) {
+        ItemStack off = p.getInventory().getItemInOffHand();
+        if (registry.gunOf(off) == null) return;
+        p.getInventory().setItemInOffHand(null);
+        p.getInventory().addItem(off).values().forEach(l -> p.getWorld().dropItemNaturally(p.getLocation(), l));
+        p.updateInventory();
+        p.sendActionBar(net.kyori.adventure.text.Component.text("Guns are two-handed - moved back to your inventory.", net.kyori.adventure.text.format.NamedTextColor.GRAY));
+    }
+
     public void tick() {
         tick++;
+        if (tick % 10 == 0) for (Player p : plugin.getServer().getOnlinePlayers()) bounceOffhandGun(p, registry);   // safety net for every path
         double maxDist = plugin.getConfig().getDouble("hold.distance", 7.0);
         double lead = plugin.getConfig().getDouble("hold.lead", 3.0);
         int linger = plugin.getConfig().getInt("hold.linger-ticks", 3);

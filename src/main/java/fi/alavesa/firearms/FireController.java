@@ -355,6 +355,12 @@ public final class FireController implements Listener {
         boolean holdingGun = registry.gunOf(p.getInventory().getItemInMainHand()) != null;
         boolean movingGun = registry.gunOf(event.getCursor()) != null || registry.gunOf(event.getCurrentItem()) != null
             || (event.getHotbarButton() >= 0 && registry.gunOf(p.getInventory().getItem(event.getHotbarButton())) != null);
+        // CREATIVE mode: the client sends "clear the source slot" and "set slot 40" as two separate packets. Cancelling the
+        // second one deleted the gun (the first had already gone through) - so let it land and bounce it back next tick.
+        if (event instanceof org.bukkit.event.inventory.InventoryCreativeEvent) {
+            if (offhandSlot && movingGun) plugin.getServer().getScheduler().runTask(plugin, () -> HoldDetector.bounceOffhandGun(p, registry));
+            return;
+        }
         if (event.getClick() == org.bukkit.event.inventory.ClickType.SWAP_OFFHAND && (movingGun || holdingGun || registry.gunOf(p.getInventory().getItemInOffHand()) != null)) { event.setCancelled(true); return; }
         if (offhandSlot && (movingGun || holdingGun)) { event.setCancelled(true); p.sendActionBar(Component.text("Guns are two-handed.", NamedTextColor.GRAY)); }
     }
