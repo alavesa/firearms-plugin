@@ -1792,6 +1792,9 @@ public final class PackGenerator {
         }
 
         /** Emit one pose (rest when clip == null, else the clip at time t): wrappers per part + composite lists. */
+        /** The rest pose's parts (no hands, no flash): what every context except first person shows for every frame. */
+        List<Object[]> restPlain;
+
         void emit(String cmd, String framePath, Clip clip, double t, boolean flashFrame) {
             Map<Bone, double[][]> cache = new HashMap<>();
             List<Object[]> plain = new ArrayList<>(), classic = new ArrayList<>(), slimL = new ArrayList<>();
@@ -1828,7 +1831,13 @@ public final class PackGenerator {
             }
             List<Object[]> cl = new ArrayList<>(plain); cl.addAll(classic);
             List<Object[]> sl = new ArrayList<>(plain); sl.addAll(slim ? slimL : classic);
-            compositeParts.put(cmd, List.of(plain, hands ? cl : plain, hands ? sl : plain));
+            if (clip == null) restPlain = plain;
+            // Third person, ground, item frames, GUI fallback: the REST pose of the gun, never a frame - the animation
+            // (per-part display rotations) exists only in the first-person entries. Hands and the flash are first-person
+            // parts anyway (variants 1-4 never reach `plain` of the rest pose).
+            boolean animateThird = plugin.getConfig().getBoolean("third-person.animate", false);
+            List<Object[]> third = clip != null && !animateThird && restPlain != null ? restPlain : plain;
+            compositeParts.put(cmd, List.of(third, hands ? cl : plain, hands ? sl : plain));
         }
     }
 

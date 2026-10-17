@@ -212,6 +212,13 @@ anim:
   root-rotation-sign: [1, 1, 1]   # (baked mode only) extra flips for the whole-gun motion
   root-position-sign: [1, 1, 1]
 
+# ---- Third person ----
+# Every gun frame carries its pose as per-part (bone) display rotations, and those exist only in the first-person
+# entries of the items file. In third person, on the ground, in item frames and in the GUI fallback the gun is its
+# REST pose: no animation, no hands, no flash. animate: true puts the frames into third person as well.
+third-person:
+  animate: false
+
 # ---- Resource pack generator ----
 pack:
   # pack.mcmeta: a wide min/max range so every 1.21.4+ / 26.x client accepts the pack without a warning

@@ -109,3 +109,12 @@ Hands with the player's skin work in grenade models exactly like in guns (see HA
 | Parts floating / torn | Rotations rounded to 22.5° steps; see the report. Multiples of 90° are exact. |
 | Animation barely visible | Too few frames or the motion sits on a sub-group instead of the top-level gun group. |
 | No sound | File missing in `models/sounds/`, or the effect name differs from the file name. |
+
+## Third person
+
+Animations are first-person only. Each frame is a `minecraft:composite` of the gun's bones, every bone a sub-model
+whose display rotation/translation is that bone's pose in the frame (per-part rotation data, never the whole gun as
+one rigid object). The items file selects those frame parts only for `firstperson_righthand` / `firstperson_lefthand`;
+`thirdperson_*`, `ground`, `fixed`, `head` and the GUI fallback get the rest pose, without hands or flash. Hands
+modelled in the .bbmodel (see HANDS.md) are therefore invisible to other players. `third-person.animate: true` in
+config.yml shows the frames in third person too.
