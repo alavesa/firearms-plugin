@@ -1,6 +1,8 @@
 package fi.alavesa.firearms;
 
 import org.bukkit.Location;
+import org.bukkit.block.Block;
+import org.bukkit.util.BoundingBox;
 import org.bukkit.entity.Display;
 import org.bukkit.entity.ItemDisplay;
 import org.bukkit.entity.Player;
@@ -71,6 +73,37 @@ public final class Casings {
         return new Quaternionf().rotationAxis(angle, (float) axis.getX(), (float) axis.getY(), (float) axis.getZ());
     }
 
+    /** World-space collision boxes of the blocks the shell is in now and will be in next (plus the one below). */
+    private static List<BoundingBox> collisionBoxes(Location a, Location b) {
+        List<BoundingBox> out = new ArrayList<>();
+        java.util.Set<Block> blocks = new java.util.LinkedHashSet<>();
+        blocks.add(a.getBlock()); blocks.add(b.getBlock()); blocks.add(b.getBlock().getRelative(org.bukkit.block.BlockFace.DOWN));
+        for (Block blk : blocks) {
+            if (blk.getType().isAir()) continue;
+            try {
+                for (BoundingBox box : blk.getCollisionShape().getBoundingBoxes())
+                    out.add(box.clone().shift(blk.getX(), blk.getY(), blk.getZ()));
+            } catch (Exception ignored) { }
+        }
+        return out;
+    }
+
+    /** The top of the first box the shell lands on moving from `from` to `to`: the box whose top it crosses
+     *  downwards (or already sits inside) while being above it horizontally. NaN = still in the air. */
+    static double landingY(List<BoundingBox> boxes, Vector from, Vector to) {
+        double best = Double.NaN;
+        for (BoundingBox box : boxes) {
+            boolean overNow = to.getX() >= box.getMinX() && to.getX() <= box.getMaxX() && to.getZ() >= box.getMinZ() && to.getZ() <= box.getMaxZ();
+            boolean overBefore = from.getX() >= box.getMinX() && from.getX() <= box.getMaxX() && from.getZ() >= box.getMinZ() && from.getZ() <= box.getMaxZ();
+            if (!overNow && !overBefore) continue;
+            double top = box.getMaxY();
+            boolean crossed = from.getY() >= top - 1e-6 && to.getY() <= top;
+            boolean inside = to.getY() >= box.getMinY() && to.getY() <= top && overNow;
+            if (crossed || inside) if (Double.isNaN(best) || top > best) best = top;
+        }
+        return best;
+    }
+
     public void tick() {
         int keep = plugin.getConfig().getInt("casings.seconds", 8) * 20;
         float scale = (float) plugin.getConfig().getDouble("casings.scale", 0.35);
@@ -82,11 +115,14 @@ public final class Casings {
             s.vel.setY(s.vel.getY() - 0.045);
             s.vel.multiply(0.98);
             Location next = s.pos.clone().add(s.vel);
-            if (!next.getBlock().getType().isAir() || !next.isChunkLoaded()) {
-                // landed: sit on top of the block it hit, stop tumbling, play a tiny tink
-                Location rest = s.pos.clone();
-                rest.setY(Math.floor(rest.getY()) + 0.03);
-                if (!rest.getBlock().getType().isAir()) rest.setY(Math.floor(s.pos.getY()) + 1.03);
+            if (!next.isChunkLoaded()) { s.d.remove(); it.remove(); continue; }
+            // landing = the first COLLISION BOX the shell falls onto (slab, stair, carpet, snow layer, fence ...),
+            // never the block's full cube: plants and other shapeless blocks are fallen through
+            double surface = landingY(collisionBoxes(s.pos, next), s.pos.toVector(), next.toVector());
+            if (!Double.isNaN(surface)) {
+                // landed: sit on top of the surface it hit, stop tumbling, play a tiny tink
+                Location rest = next.clone();
+                rest.setY(surface + 0.03);
                 s.landed = true; s.landedAt = s.age;
                 s.d.setTransformation(new Transformation(new Vector3f(), new Quaternionf().rotationX((float) Math.toRadians(90)).mul(new Quaternionf().rotationY(s.angle)), new Vector3f(scale, scale, scale), new Quaternionf()));
                 s.d.teleport(rest);

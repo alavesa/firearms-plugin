@@ -6,7 +6,7 @@
 
   <groupId>fi.alavesa</groupId>
   <artifactId>firearms-plugin</artifactId>
-  <version>0.17.0</version>
+  <version>0.17.1</version>
   <packaging>jar</packaging>
 
   <name>Firearms</name>
@@ -32,6 +32,12 @@
       <scope>provided</scope>
     </dependency>
     <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>5.11.4</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
       <groupId>kr.toxicity.model</groupId>
       <artifactId>bettermodel</artifactId>
       <version>3.5.0</version>
@@ -41,6 +47,13 @@
   </dependencies>
 
   <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.5.4</version>
+      </plugin>
+    </plugins>
     <finalName>Firearms-${project.version}</finalName>
     <resources>
       <resource>
