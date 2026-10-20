@@ -205,7 +205,15 @@ public final class PackGenerator {
         return new Result(models, frames, placeholders, warnings, zip, bytes, biggest, System.currentTimeMillis() - t0, notes);
     }
 
-    private void put(String path, String text) { putBytes(path, text.getBytes(StandardCharsets.UTF_8)); }
+    private void put(String path, String text) {
+        // A single NaN / Infinity (a zero-scale bone, a degenerate rotation) is invalid JSON: the client drops that
+        // part's model - "broken parts" / "missing frames". Never let one through.
+        if (text.contains("NaN") || text.contains("Infinity")) {
+            text = text.replace("-Infinity", "0").replace("Infinity", "0").replace("NaN", "0");
+            warnings.add(path.replace("assets/" + NS + "/models/item/", "") + ": non-finite transform values replaced by 0 (check that bone for a zero scale or a broken keyframe)");
+        }
+        putBytes(path, text.getBytes(StandardCharsets.UTF_8));
+    }
     private void putBytes(String path, byte[] data) {
         files.put(path, data);
         if (currentName != null) bytesPerModel.merge(currentName, (long) data.length, Long::sum);
@@ -214,6 +222,7 @@ public final class PackGenerator {
     private void itemsFile(String base, Map<String, String> map, boolean noSwapAnimation) {
         JsonArray cases = new JsonArray();
         Set<String> seen = new LinkedHashSet<>();
+        Set<String> written = new LinkedHashSet<>();
         for (var e : map.entrySet()) {
             if (!seen.add(e.getKey())) continue;                  // duplicate "when" would be rejected by the client
             // Final safety net: a single bad case makes the client drop the WHOLE items file (every model purple).
@@ -221,6 +230,7 @@ public final class PackGenerator {
                 warnings.add("case '" + e.getKey() + "' skipped - model path '" + e.getValue() + "' is invalid or its file was not generated");
                 continue;
             }
+            written.add(e.getKey());
             JsonObject c = new JsonObject();
             c.addProperty("when", e.getKey());
             JsonObject m = new JsonObject();
@@ -381,6 +391,16 @@ public final class PackGenerator {
         // count on the durability bar, every clip frame changes the model). This root property turns it off,
         // so the gun stays on screen and the baked fire/reload frames are actually visible.
         if (noSwapAnimation) root.addProperty("hand_animation_on_swap", false);
+        // every frame the animation index promises must be a case here, or that frame shows purple while firing
+        for (var en : animIndex.entrySet()) {
+            String model = en.getKey();
+            for (var clip : en.getValue().entrySet()) {
+                int n = clip.getValue()[0];
+                List<Integer> missing = new ArrayList<>();
+                for (int f = 1; f <= n; f++) { String cmd = model + "_" + clip.getKey() + "_" + f; if (map.containsKey(cmd) && !written.contains(cmd)) missing.add(f); }
+                if (!missing.isEmpty()) warnings.add(model + " clip '" + clip.getKey() + "': frame(s) " + missing + " missing from the pack (their model files were rejected - see the warnings above)");
+            }
+        }
         put("assets/minecraft/items/" + base + ".json", GSON.toJson(root));
     }
 
@@ -508,7 +528,11 @@ public final class PackGenerator {
             case "blood" -> {
                 File custom = new File(dir, name + ".png");                                   // blood_1.png ...
                 File shared = new File(dir, name.replaceAll("_\\d+$", "") + ".png");         // or one blood.png for all
-                byte[] png = custom.exists() ? Files.readAllBytes(custom.toPath()) : shared.exists() ? Files.readAllBytes(shared.toPath()) : bloodPng(name.hashCode());
+                int variantNo = 1;
+                try { variantNo = Integer.parseInt(name.replaceAll(".*_(\\d+)$", "$1")); } catch (NumberFormatException ignored) { }
+                // blood_N.png = your own; one shared blood.png = turned/mirrored/darkened/eroded per variant so the
+                // stains differ in shape and tone, not only in size; nothing = a generated splatter per variant
+                byte[] png = custom.exists() ? Files.readAllBytes(custom.toPath()) : shared.exists() ? variantPng(Files.readAllBytes(shared.toPath()), variantNo) : bloodPng(name.hashCode() * 31 + variantNo);
                 files.put("assets/" + NS + "/textures/item/" + path(name) + ".png", png);
                 tex.addProperty("0", NS + ":item/" + path(name));
                 tex.addProperty("particle", NS + ":item/" + path(name));
@@ -756,6 +780,33 @@ public final class PackGenerator {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ImageIO.write(img, "png", out);
         return out.toByteArray();
+    }
+
+    /** Variant k of a stain texture: rotated by 90 deg steps, mirrored for k > 4, a little darker and with random
+     *  pixels eroded at the edges, so one blood.png gives a whole family of different-looking stains. */
+    static byte[] variantPng(byte[] source, int k) throws IOException {
+        BufferedImage src = ImageIO.read(new java.io.ByteArrayInputStream(source));
+        if (src == null || k <= 1) return source;
+        int w = src.getWidth(), h = src.getHeight();
+        int rot = (k - 1) % 4; boolean mirror = ((k - 1) / 4) % 2 == 1;
+        BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        java.util.Random r = new java.util.Random(k * 7919L);
+        double tone = 1.0 - 0.08 * ((k - 1) % 5);
+        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
+            int sx = x, sy = y;
+            if (mirror) sx = w - 1 - sx;
+            for (int i = 0; i < rot; i++) { int t = sx; sx = w - 1 - sy; sy = t; }
+            int argb = src.getRGB(Math.max(0, Math.min(w - 1, sx)), Math.max(0, Math.min(h - 1, sy)));
+            int a = (argb >>> 24);
+            if (a == 0) continue;
+            // erode: edge pixels (weak alpha) drop out at random, varying the outline
+            if (a < 200 && r.nextDouble() < 0.35) continue;
+            int red = (int) (((argb >> 16) & 255) * tone), g = (int) (((argb >> 8) & 255) * tone), b = (int) ((argb & 255) * tone);
+            out.setRGB(x, y, (a << 24) | (red << 16) | (g << 8) | b);
+        }
+        ByteArrayOutputStream bo = new ByteArrayOutputStream();
+        ImageIO.write(out, "png", bo);
+        return bo.toByteArray();
     }
 
     private static byte[] craterPng() throws IOException {
@@ -1041,12 +1092,13 @@ public final class PackGenerator {
             }
             // Frame count is PER ANIMATION: guns.yml anim.<clip>.frames, else the animation's own Blockbench
             // snapping (keyframes per second), else length x 20 / frame-ticks; capped by anim.max-frames (per gun or config).
-            int maxFrames = Math.max(2, plugin.getConfig().getInt("anim.max-frames", 40));
+            int maxFrames = Math.max(2, plugin.getConfig().getInt("anim.max-frames", 120));
             if (currentGun != null && currentGun.animCfg() != null && currentGun.animCfg().contains("max-frames")) maxFrames = Math.max(2, currentGun.animCfg().getInt("max-frames"));
             int n = 0;
             if (currentGun != null && currentGun.animCfg() != null && currentGun.animCfg().contains(key + ".frames")) n = currentGun.animCfg().getInt(key + ".frames");
             if (n <= 0 && a.has("snapping")) { double snap = num(a.get("snapping"), 0); if (snap > 0) n = (int) Math.ceil(clip.length * snap); }
             if (n <= 0) n = (int) Math.ceil(clip.length * 20.0 / frameTicks);
+            if (n > maxFrames) warnings.add(name + " clip '" + key + "': " + n + " frames capped at " + maxFrames + " (the clip is sampled coarser; raise anim.max-frames or the gun's anim.max-frames)");
             n = Math.max(1, Math.min(maxFrames, n));
             int clipTicks = Math.max(1, (int) Math.round(clip.length * 20.0 / n));
             for (int i = 1; i <= n; i++) {

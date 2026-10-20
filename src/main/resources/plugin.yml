@@ -2,6 +2,7 @@ name: Firearms
 version: '${project.version}'
 main: fi.alavesa.firearms.FirearmsPlugin
 api-version: '1.21'
+softdepend: [BetterModel]
 description: Ray-based guns - hold-to-spray, F reload, pump-action, magazines, hitscan + projectile, pass-through blocks, packet recoil, craters, .bbmodel pack generator.
 commands:
   firearms:

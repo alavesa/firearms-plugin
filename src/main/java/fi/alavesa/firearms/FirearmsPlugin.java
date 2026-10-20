@@ -25,6 +25,11 @@ public final class FirearmsPlugin extends JavaPlugin {
     private String duplicateJars;
     private volatile boolean packRunning = false;
 
+    private HitAnimations hitAnimations;
+    private PackHost packHost;
+    public HitAnimations hitAnimations() { return hitAnimations; }
+    public PackHost packHost() { return packHost; }
+
     @Override
     public void onEnable() {
         saveDefaultConfig();
@@ -49,6 +54,10 @@ public final class FirearmsPlugin extends JavaPlugin {
         getServer().getScheduler().runTaskTimer(this, hold::tick, 1L, 1L);
         getServer().getScheduler().runTaskTimer(this, hold::poll, 20L, 5L);
         getServer().getScheduler().runTaskTimer(this, ballistics::tick, 1L, 1L);
+        hitAnimations = new HitAnimations(this);
+        if (hitAnimations.available()) getLogger().info("BetterModel found: flinch animations play on the players' rig (hit-animations in config.yml).");
+        packHost = new PackHost(this);
+        packHost.start();
         getServer().getPluginManager().registerEvents(new org.bukkit.event.Listener() {
             @org.bukkit.event.EventHandler
             public void onQuit(org.bukkit.event.player.PlayerQuitEvent e) { hold.forget(e.getPlayer().getUniqueId()); ArmSkin.forget(e.getPlayer().getUniqueId()); }
@@ -77,6 +86,7 @@ public final class FirearmsPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new org.bukkit.event.Listener() {
             @org.bukkit.event.EventHandler
             public void onJoin(org.bukkit.event.player.PlayerJoinEvent e) {
+                getServer().getScheduler().runTaskLater(FirearmsPlugin.this, () -> { if (e.getPlayer().isOnline()) packHost.send(e.getPlayer()); }, 40L);
                 if (duplicateJars != null && e.getPlayer().hasPermission("firearms.admin"))
                     e.getPlayer().sendMessage(Component.text("[Firearms] Several Firearms jars in plugins/ (" + duplicateJars + ") - delete the old one and restart, or updates do nothing.", NamedTextColor.RED));
             }
@@ -87,6 +97,7 @@ public final class FirearmsPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (packHost != null) packHost.stop();
         if (controller != null) controller.shutdown();
         if (hold != null) hold.clearAll();
         if (ballistics != null) ballistics.clearAll();
@@ -202,14 +213,16 @@ public final class FirearmsPlugin extends JavaPlugin {
                             getLogger().warning("Pack generation failed: " + e);
                             return;
                         }
-                        if (!dry) registry.load();
+                        if (!dry) { registry.load(); packHost.sendAll(); }
                         sender.sendMessage(Component.text((dry ? "Check done" : "Pack written: " + res.zip().getPath()) + "  (" + res.millis() + " ms, " + (res.bytes() / 1024) + " KB uncompressed)", NamedTextColor.GREEN));
                         sender.sendMessage(Component.text(res.models() + " .bbmodel converted, " + res.frames() + " animation frames baked, "
                             + res.placeholders() + " placeholder model(s)", NamedTextColor.GRAY));
                         if (!res.biggest().isEmpty()) sender.sendMessage(Component.text("Biggest: " + String.join(", ", res.biggest()), NamedTextColor.DARK_GRAY));
                         for (String nte : res.notes()) sender.sendMessage(Component.text(nte, NamedTextColor.GRAY));
                         for (String w : res.warnings()) sender.sendMessage(Component.text("! " + w, NamedTextColor.YELLOW));
-                        if (!dry) sender.sendMessage(Component.text("Now upload/apply the NEW Firearms-pack.zip - an old pack with this new index shows purple frames while firing.", NamedTextColor.YELLOW));
+                        if (!dry) sender.sendMessage(Component.text(packHost.enabled() && packHost.sha1() != null && !packHost.sha1().isEmpty()
+                            ? "The new pack was sent to every online player (pack.host); newcomers get it on join."
+                            : "Now upload/apply the NEW Firearms-pack.zip - an old pack with this new index shows purple frames while firing.", NamedTextColor.YELLOW));
                     });
                 });
     }

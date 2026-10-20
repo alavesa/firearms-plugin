@@ -183,9 +183,8 @@ public final class Ballistics {
             } finally { applyingDamage = false; }
             if (shooter != null && shooter.isOnline()) {
                 shooter.playSound(shooter.getLocation(), "minecraft:entity.arrow.hit_player", 0.6f, zone.equals("head") ? 1.9f : 1.4f);
-                if (zone.equals("head") && plugin.getConfig().getBoolean("damage.zones.headshot-message", true))
-                    shooter.sendActionBar(net.kyori.adventure.text.Component.text("Headshot!", net.kyori.adventure.text.format.NamedTextColor.GOLD));
             }
+            if (target instanceof Player victim && !victim.isDead() && plugin.hitAnimations() != null) plugin.hitAnimations().play(victim, zone, hit.point);
         } else if (hit.block != null) {
             World w = hit.block.getWorld();
             w.spawnParticle(Particle.BLOCK, hit.point, 6, 0.05, 0.05, 0.05, 0.02, hit.block.getBlockData());

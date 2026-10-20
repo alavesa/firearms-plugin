@@ -68,7 +68,8 @@ blood:
   range: 4.0             # how far behind the victim a wall can be for a splatter
   seconds: 60            # how long a splatter stays
   size: 0.7
-  variants: 4            # blood_1 .. blood_N textures, picked at random (models/blood_1.png... or one blood.png)
+  variants: 6            # blood_1 .. blood_N textures, picked at random: your own models/blood_N.png, or one blood.png
+                         # that the pack turns, mirrors, darkens and erodes into N different stains, or generated splatters
   extra: 2               # extra splatters around the victim per hit (floor + a random direction)
   model: blood
 # Hit zones: multiplier by where the bullet lands on the hitbox (height fraction). Vests do not cover the head.
@@ -80,7 +81,6 @@ damage:
     legs: 0.8
     head-from: 0.75      # top 25 % of the hitbox = head
     legs-to: 0.4         # bottom 40 % = legs
-    headshot-message: true
 
 # ---- Shell casings ----
 casings:
@@ -195,7 +195,7 @@ anim:
   #   no 22.5 degree rounding at all. baked: the older single-model mode (rotations rounded to 22.5 steps).
   mode: composite
   frame-ticks: 1         # auto frame spacing when an animation has no Blockbench snapping and no explicit frames
-  max-frames: 40         # cap per clip (per gun: guns.yml anim.max-frames)
+  max-frames: 120        # cap per clip (per gun: guns.yml anim.max-frames); a capped clip is reported by /firearms pack
   # Which animation NAMES in the .bbmodel mean which clip (exact name first, then "contains"). Add your own words,
   # e.g. "rel" for reload. Per gun: guns.yml anim-names: with the same layout.
   names:
@@ -219,8 +219,38 @@ anim:
 third-person:
   animate: false
 
+# ---- Flinch animations on a shot player (BetterModel) ----
+# Needs the BetterModel plugin and a player rig: plugins/BetterModel/players/<rig>.bbmodel with animations named
+# below. The animation is picked by hit zone and the side the bullet came from, most specific first:
+#   head_left -> head -> body_left -> body. Unset or missing names fall through. rig: "" = whatever rig the player
+# wears. attach-if-missing: put the rig on a player who is not wearing one, just for the animation.
+hit-animations:
+  enabled: true
+  rig: player_rig
+  attach-if-missing: false
+  animations:
+    head: hit_head
+    body: hit_body
+    legs: hit_legs
+    # head_left: hit_head_left   # optional side variants
+    # head_right: hit_head_right
+    # body_left: hit_body_left
+    # body_right: hit_body_right
+    # legs_left: hit_legs_left
+    # legs_right: hit_legs_right
+
 # ---- Resource pack generator ----
 pack:
+  # Built-in pack host: Firearms-pack.zip is served on `port` and handed to every player on join and again right after
+  # /firearms pack, ADDED to the server's other packs (server.properties, BetterModel ...), so a re-tuned pack is live
+  # at once. The port must be reachable by players (open it in the firewall / hosting panel). address: the host or IP
+  # players use to reach the server; "" = the address each player connected with.
+  host:
+    enabled: true
+    port: 25580
+    address: ""
+    required: false
+    prompt: "Firearms gun models"
   # pack.mcmeta: a wide min/max range so every 1.21.4+ / 26.x client accepts the pack without a warning
   min-format: 46
   max-format: 999
