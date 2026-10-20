@@ -181,6 +181,7 @@ public final class FirearmsPlugin extends JavaPlugin {
                 if (!any) sender.sendMessage(Component.text("  none - run /firearms pack and check its 'clips:' lines; the animation names must match anim.names", NamedTextColor.YELLOW));
                 return true;
             }
+            case "host", "packhost" -> { sender.sendMessage(Component.text(packHost.status(), NamedTextColor.GOLD)); if (sender instanceof Player pl) { sender.sendMessage(Component.text("URL for you: " + packHost.urlFor(pl) + "  sha1 " + packHost.sha1(), NamedTextColor.GRAY)); packHost.send(pl); sender.sendMessage(Component.text("(pack re-sent to you)", NamedTextColor.GRAY)); } return true; }
             case "version" -> { return usage(sender); }
             case "reload" -> {
                 if (!sender.hasPermission("firearms.admin")) return deny(sender);
@@ -205,6 +206,7 @@ public final class FirearmsPlugin extends JavaPlugin {
                 getServer().getScheduler().runTaskAsynchronously(this, () -> {
                     PackGenerator.Result r = null; Exception err = null;
                     try { r = new PackGenerator(this, registry, dry).generate(); } catch (Exception ex) { err = ex; }
+                    if (!dry && err == null) packHost.prepareAsync();   // hash + (upload mode) upload, still off the main thread
                     final PackGenerator.Result res = r; final Exception e = err;
                     getServer().getScheduler().runTask(this, () -> {
                         packRunning = false;
@@ -220,9 +222,12 @@ public final class FirearmsPlugin extends JavaPlugin {
                         if (!res.biggest().isEmpty()) sender.sendMessage(Component.text("Biggest: " + String.join(", ", res.biggest()), NamedTextColor.DARK_GRAY));
                         for (String nte : res.notes()) sender.sendMessage(Component.text(nte, NamedTextColor.GRAY));
                         for (String w : res.warnings()) sender.sendMessage(Component.text("! " + w, NamedTextColor.YELLOW));
-                        if (!dry) sender.sendMessage(Component.text(packHost.enabled() && packHost.sha1() != null && !packHost.sha1().isEmpty()
-                            ? "The new pack was sent to every online player (pack.host); newcomers get it on join."
-                            : "Now upload/apply the NEW Firearms-pack.zip - an old pack with this new index shows purple frames while firing.", NamedTextColor.YELLOW));
+                        if (!dry) {
+                            String stt = packHost.status();
+                            boolean sent = packHost.enabled() && !stt.contains("PROBLEM") && !stt.contains("not running") && !stt.contains("disabled");
+                            sender.sendMessage(Component.text(sent ? "The new pack was sent to every online player; newcomers get it on join. " + stt
+                                : stt + " Until that is fixed, apply the NEW Firearms-pack.zip manually - an old pack with this new index shows purple frames while firing.", sent ? NamedTextColor.GREEN : NamedTextColor.YELLOW));
+                        }
                     });
                 });
     }
@@ -287,13 +292,13 @@ public final class FirearmsPlugin extends JavaPlugin {
 
     private boolean usage(CommandSender s) {
         s.sendMessage(Component.text("Firearms v" + getPluginMeta().getVersion() + (duplicateJars != null ? "  (WARNING: several jars: " + duplicateJars + ")" : ""), NamedTextColor.GOLD));
-        s.sendMessage(Component.text("/firearms list | give <gun|mag|ammo|vest|grenade> [amount] [player] | pose <gun> offset|rotate|scale ... | models | pack | check | clips <model> | reload | version", NamedTextColor.YELLOW));
+        s.sendMessage(Component.text("/firearms list | give <gun|mag|ammo|vest|grenade> [amount] [player] | pose <gun> offset|rotate|scale ... | models | pack | check | host | clips <model> | reload | version", NamedTextColor.YELLOW));
         return true;
     }
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        if (args.length == 1) return filter(Stream.of("list", "give", "pose", "models", "pack", "check", "clips", "reload", "version"), args[0]);
+        if (args.length == 1) return filter(Stream.of("list", "give", "pose", "models", "pack", "check", "host", "clips", "reload", "version"), args[0]);
         if (args[0].equalsIgnoreCase("pose")) {
             if (args.length == 2) return filter(registry.gunIds().stream(), args[1]);
             if (args.length == 3) return filter(Stream.of("offset", "rotate", "scale", "reset"), args[2]);

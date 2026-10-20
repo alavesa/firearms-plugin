@@ -241,14 +241,22 @@ hit-animations:
 
 # ---- Resource pack generator ----
 pack:
-  # Built-in pack host: Firearms-pack.zip is served on `port` and handed to every player on join and again right after
-  # /firearms pack, ADDED to the server's other packs (server.properties, BetterModel ...), so a re-tuned pack is live
-  # at once. The port must be reachable by players (open it in the firewall / hosting panel). address: the host or IP
-  # players use to reach the server; "" = the address each player connected with.
+  # Getting the pack to players automatically (on join and right after /firearms pack, added on top of the server's
+  # other packs). mode:
+  #   self   - built-in HTTP server on `port`. The port MUST be reachable by players (open it in the firewall / hosting
+  #            panel) and it can NOT be the Minecraft port - the game server owns that one. address: the host or IP
+  #            players use to reach the server ("" = the address each player connected with).
+  #   upload - no port to open: after every build the zip is uploaded to a public file host (catbox.moe, 0x0.st as
+  #            fallback) and that link is sent. Needs internet from the server; the pack is public there (it is sent
+  #            to every player anyway).
+  #   url    - you host Firearms-pack.zip yourself: put its link in `url` and re-upload after each /firearms pack.
+  # A failed download on a client is reported in the console and to admins with the reason. /firearms host = status.
   host:
     enabled: true
+    mode: self
     port: 25580
     address: ""
+    url: ""
     required: false
     prompt: "Firearms gun models"
   # pack.mcmeta: a wide min/max range so every 1.21.4+ / 26.x client accepts the pack without a warning
