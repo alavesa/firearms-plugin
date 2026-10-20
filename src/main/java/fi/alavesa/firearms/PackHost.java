@@ -44,7 +44,15 @@ public final class PackHost implements org.bukkit.event.Listener {
     public PackHost(FirearmsPlugin plugin) { this.plugin = plugin; }
 
     public boolean enabled() { return plugin.getConfig().getBoolean("pack.host.enabled", true); }
-    public String mode() { return plugin.getConfig().getString("pack.host.mode", "self").toLowerCase(Locale.ROOT).trim(); }
+    /** Configured mode; "auto" (the default) = upload, falling back to the built-in server if uploading fails. */
+    public String configuredMode() { return plugin.getConfig().getString("pack.host.mode", "auto").toLowerCase(Locale.ROOT).trim(); }
+    private boolean autoFellBack;
+    /** The mode in effect right now. */
+    public String mode() {
+        String m = configuredMode();
+        if (m.equals("auto")) return autoFellBack ? "self" : "upload";
+        return m;
+    }
     public int port() { return plugin.getConfig().getInt("pack.host.port", 25580); }
     public File zip() { return new File(plugin.getDataFolder(), "Firearms-pack.zip"); }
     public String sha1() { return sha1; }
@@ -55,9 +63,9 @@ public final class PackHost implements org.bukkit.event.Listener {
         refreshHash();
         switch (mode()) {
             case "self" -> startServer();
-            case "upload" -> { plugin.getLogger().info("Pack host: upload mode - the pack is uploaded to a public file host after each build and that link is sent to players."); plugin.getServer().getScheduler().runTaskAsynchronously(plugin, this::prepareAsync); }
+            case "upload" -> { plugin.getLogger().info("Pack host: " + (configuredMode().equals("auto") ? "auto mode - " : "upload mode - ") + "the pack is uploaded to a public file host after each build and that link is sent to players (no port to open)."); plugin.getServer().getScheduler().runTaskAsynchronously(plugin, this::prepareAsync); }
             case "url" -> plugin.getLogger().info("Pack host: url mode - players get " + plugin.getConfig().getString("pack.host.url", "") + " (re-upload the zip there after each /firearms pack).");
-            default -> plugin.getLogger().warning("pack.host.mode must be self, upload or url (is '" + mode() + "') - nothing is sent.");
+            default -> plugin.getLogger().warning("pack.host.mode must be auto, self, upload or url (is '" + mode() + "') - nothing is sent.");
         }
     }
 
@@ -108,9 +116,18 @@ public final class PackHost implements org.bukkit.event.Listener {
         String url = null;
         try { url = uploadCatbox(f); } catch (Exception e) { plugin.getLogger().warning("catbox.moe upload failed: " + e.getMessage()); }
         if (url == null) try { url = upload0x0(f); } catch (Exception e) { plugin.getLogger().warning("0x0.st upload failed: " + e.getMessage()); }
-        if (url == null) { lastProblem = "the pack could not be uploaded to a file host (no internet from the server? try again with /firearms pack, or use pack.host.mode: self / url)"; plugin.getLogger().severe("Pack host: " + lastProblem); return; }
+        if (url == null) {
+            if (configuredMode().equals("auto") && !autoFellBack) {
+                autoFellBack = true;
+                plugin.getLogger().warning("Pack host: upload failed - falling back to the built-in server on port " + port() + " (that port must then be open to players).");
+                plugin.getServer().getScheduler().runTask(plugin, () -> { startServer(); sendAll(); });
+                return;
+            }
+            lastProblem = "the pack could not be uploaded to a file host (no internet from the server? try again with /firearms pack, or use pack.host.mode: self / url)"; plugin.getLogger().severe("Pack host: " + lastProblem); return;
+        }
         uploadedUrl = url; uploadedSha1 = sha1; lastProblem = "";
         plugin.getLogger().info("Pack host: uploaded Firearms-pack.zip -> " + url);
+        plugin.getServer().getScheduler().runTask(plugin, this::sendAll);   // whoever joined while it was uploading
     }
 
     private static String multipart(String boundary, String field, String filename, byte[] data, String... extra) {
@@ -184,7 +201,7 @@ public final class PackHost implements org.bukkit.event.Listener {
         if (!lastProblem.isEmpty()) return "pack host PROBLEM: " + lastProblem;
         return switch (mode()) {
             case "self" -> server == null ? "pack host not running." : "pack host: built-in server on port " + port() + " (open it to players; address = the one they connect with" + (plugin.getConfig().getString("pack.host.address", "").isBlank() ? "" : ", pack.host.address=" + plugin.getConfig().getString("pack.host.address")) + ").";
-            case "upload" -> uploadedUrl.isEmpty() ? "pack host: upload mode, nothing uploaded yet (run /firearms pack)." : "pack host: upload mode, players get " + uploadedUrl + (uploadedSha1.equals(sha1) ? "" : " (OUTDATED - run /firearms pack)");
+            case "upload" -> uploadedUrl.isEmpty() ? "pack host: upload mode, nothing uploaded yet (uploading / run /firearms pack)." : "pack host: " + (configuredMode().equals("auto") ? "auto (upload)" : "upload mode") + ", players get " + uploadedUrl + (uploadedSha1.equals(sha1) ? "" : " (OUTDATED - run /firearms pack)");
             case "url" -> "pack host: url mode, players get " + plugin.getConfig().getString("pack.host.url", "");
             default -> "pack host: unknown mode '" + mode() + "'";
         };

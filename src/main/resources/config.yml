@@ -243,6 +243,7 @@ hit-animations:
 pack:
   # Getting the pack to players automatically (on join and right after /firearms pack, added on top of the server's
   # other packs). mode:
+  #   auto   - (default) upload, and only if uploading fails fall back to the built-in server. Nothing to configure.
   #   self   - built-in HTTP server on `port`. The port MUST be reachable by players (open it in the firewall / hosting
   #            panel) and it can NOT be the Minecraft port - the game server owns that one. address: the host or IP
   #            players use to reach the server ("" = the address each player connected with).
@@ -253,7 +254,7 @@ pack:
   # A failed download on a client is reported in the console and to admins with the reason. /firearms host = status.
   host:
     enabled: true
-    mode: self
+    mode: auto
     port: 25580
     address: ""
     url: ""
