@@ -55,7 +55,10 @@ public final class FirearmsPlugin extends JavaPlugin {
         getServer().getScheduler().runTaskTimer(this, hold::poll, 20L, 5L);
         getServer().getScheduler().runTaskTimer(this, ballistics::tick, 1L, 1L);
         hitAnimations = new HitAnimations(this);
-        if (hitAnimations.available()) getLogger().info("BetterModel found: flinch animations play on the players' rig (hit-animations in config.yml).");
+        if (hitAnimations.available()) {
+            try { hitAnimations.sync(); } catch (Throwable t) { getLogger().warning("RP Engine rig sync failed: " + t); }
+            getLogger().info("RP Engine found: flinch animations play as emotes from models/players/<rig>.bbmodel (hit-animations in config.yml).");
+        }
         packHost = new PackHost(this);
         packHost.start();
         getServer().getPluginManager().registerEvents(new org.bukkit.event.Listener() {
@@ -234,41 +237,54 @@ public final class FirearmsPlugin extends JavaPlugin {
 
     /** /firearms pose <gun> [offset|rotate|scale [x y z]] - first-person position of the gun model, saved to guns.yml
      *  display.firstperson_righthand (+ lefthand), then the pack is rebuilt. "~" keeps a value, "~2" adds 2. */
+    private static final java.util.Map<String, String[]> POSE_CTX = new java.util.LinkedHashMap<>();
+    static {
+        POSE_CTX.put("first", new String[]{"firstperson_righthand", "firstperson_lefthand"});
+        POSE_CTX.put("third", new String[]{"thirdperson_righthand", "thirdperson_lefthand"});
+        POSE_CTX.put("gui", new String[]{"gui"}); POSE_CTX.put("ground", new String[]{"ground"}); POSE_CTX.put("fixed", new String[]{"fixed"}); POSE_CTX.put("head", new String[]{"head"});
+    }
+
+    /** /firearms pose <gun> [first|third|gui|ground|fixed|head] [offset|rotate|scale <...>|reset] - the gun model's display
+     *  transform per display state, saved to guns.yml display.<context>, then the pack is rebuilt and re-sent. */
     private boolean pose(CommandSender sender, String[] args) {
-        if (args.length < 2) { sender.sendMessage(Component.text("/firearms pose <gun> offset <x> <y> <z> | rotate <x> <y> <z> | scale <s>   (model px / degrees; ~ = keep, ~2 = add 2)", NamedTextColor.YELLOW)); return true; }
+        if (args.length < 2) return poseUsage(sender);
         GunType g = registry.gun(args[1].toLowerCase());
         if (g == null) { sender.sendMessage(Component.text("Unknown gun: " + args[1] + " (" + String.join(", ", registry.gunIds()) + ")", NamedTextColor.RED)); return true; }
         File gf = new File(getDataFolder(), "guns.yml");
         org.bukkit.configuration.file.YamlConfiguration y = org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(gf);
-        String base = "guns." + g.id() + ".display.firstperson_righthand.";
+        int ai = 2;
+        String ctx = "first";
+        if (args.length > 2 && POSE_CTX.containsKey(args[2].toLowerCase())) { ctx = args[2].toLowerCase(); ai = 3; }
+        String[] keys = POSE_CTX.get(ctx);
+        String base = "guns." + g.id() + ".display." + keys[0] + ".";
         double[] tr = vec3(y, base + "translation", new double[]{0, 0, 0}), rot = vec3(y, base + "rotation", new double[]{0, 0, 0}), sc = vec3(y, base + "scale", new double[]{1, 1, 1});
-        if (args.length < 3) {
-            sender.sendMessage(Component.text(g.id() + " first person: offset " + fmt(tr) + "  rotate " + fmt(rot) + "  scale " + fmt(sc)
-                + (y.contains(base + "translation") || y.contains(base + "rotation") || y.contains(base + "scale") ? "" : "  (not set: the .bbmodel's own Display values are used)"), NamedTextColor.GOLD));
+        if (args.length <= ai) {
+            sender.sendMessage(Component.text(g.id() + " display states (guns.yml; unset = the .bbmodel's own Display values):", NamedTextColor.GOLD));
+            for (var en : POSE_CTX.entrySet()) {
+                String b = "guns." + g.id() + ".display." + en.getValue()[0] + ".";
+                boolean set = y.contains(b + "translation") || y.contains(b + "rotation") || y.contains(b + "scale");
+                sender.sendMessage(Component.text("  " + en.getKey() + ": " + (set ? "offset " + fmt(vec3(y, b + "translation", new double[]{0, 0, 0})) + "  rotate " + fmt(vec3(y, b + "rotation", new double[]{0, 0, 0})) + "  scale " + fmt(vec3(y, b + "scale", new double[]{1, 1, 1})) : "(model's own)"), set ? NamedTextColor.YELLOW : NamedTextColor.GRAY));
+            }
             return true;
         }
-        String what = args[2].toLowerCase();
+        String what = args[ai].toLowerCase();
         try {
             switch (what) {
-                case "offset", "position", "translation", "move" -> { if (args.length < 6) return poseUsage(sender); for (int i = 0; i < 3; i++) tr[i] = Math.max(-80, Math.min(80, rel(args[3 + i], tr[i]))); y.set(base + "translation", list(tr)); }
-                case "rotate", "rotation", "rot" -> { if (args.length < 6) return poseUsage(sender); for (int i = 0; i < 3; i++) rot[i] = rel(args[3 + i], rot[i]); y.set(base + "rotation", list(rot)); }
-                case "scale", "size" -> { if (args.length < 4) return poseUsage(sender); double v = Math.max(0.05, Math.min(4, rel(args[3], sc[0]))); sc = new double[]{v, v, v}; y.set(base + "scale", list(sc)); }
-                case "reset", "clear" -> { y.set("guns." + g.id() + ".display", null); }
+                case "offset", "position", "translation", "move" -> { if (args.length < ai + 4) return poseUsage(sender); for (int i = 0; i < 3; i++) tr[i] = Math.max(-80, Math.min(80, rel(args[ai + 1 + i], tr[i]))); for (String k : keys) y.set("guns." + g.id() + ".display." + k + ".translation", list(tr)); }
+                case "rotate", "rotation", "rot" -> { if (args.length < ai + 4) return poseUsage(sender); for (int i = 0; i < 3; i++) rot[i] = rel(args[ai + 1 + i], rot[i]); for (String k : keys) y.set("guns." + g.id() + ".display." + k + ".rotation", list(rot)); }
+                case "scale", "size" -> { if (args.length < ai + 2) return poseUsage(sender); double v = Math.max(0.05, Math.min(4, rel(args[ai + 1], sc[0]))); sc = new double[]{v, v, v}; for (String k : keys) y.set("guns." + g.id() + ".display." + k + ".scale", list(sc)); }
+                case "reset", "clear" -> { for (String k : keys) y.set("guns." + g.id() + ".display." + k, null); if (y.getConfigurationSection("guns." + g.id() + ".display") != null && y.getConfigurationSection("guns." + g.id() + ".display").getKeys(false).isEmpty()) y.set("guns." + g.id() + ".display", null); }
                 default -> { return poseUsage(sender); }
             }
         } catch (NumberFormatException ex) { sender.sendMessage(Component.text("Numbers please: " + ex.getMessage(), NamedTextColor.RED)); return true; }
-        if (!what.equals("reset") && !what.equals("clear")) {
-            // the left hand is the mirror image: same values
-            for (String k : new String[]{"translation", "rotation", "scale"}) if (y.contains(base + k)) y.set("guns." + g.id() + ".display.firstperson_lefthand." + k, y.get(base + k));
-        }
         try { y.save(gf); } catch (java.io.IOException ex) { sender.sendMessage(Component.text("Could not write guns.yml: " + ex.getMessage(), NamedTextColor.RED)); return true; }
         registry.load();
-        sender.sendMessage(Component.text(g.id() + " first person: offset " + fmt(tr) + "  rotate " + fmt(rot) + "  scale " + fmt(sc) + "  -> saved to guns.yml", NamedTextColor.GREEN));
+        sender.sendMessage(Component.text(g.id() + " " + ctx + ": offset " + fmt(tr) + "  rotate " + fmt(rot) + "  scale " + fmt(sc) + "  -> saved to guns.yml (display." + String.join(" + ", keys) + "); rebuilding the pack", NamedTextColor.GREEN));
         buildPack(sender, false);
         return true;
     }
 
-    private boolean poseUsage(CommandSender s) { s.sendMessage(Component.text("/firearms pose <gun> offset <x> <y> <z> | rotate <x> <y> <z> | scale <s> | reset", NamedTextColor.YELLOW)); return true; }
+    private boolean poseUsage(CommandSender s) { s.sendMessage(Component.text("/firearms pose <gun> [first|third|gui|ground|fixed|head] offset <x> <y> <z> | rotate <x> <y> <z> | scale <s> | reset   (model px / degrees; ~ = keep, ~2 = add 2; no state = first)", NamedTextColor.YELLOW)); return true; }
     private static double rel(String a, double cur) {
         if (a.equals("~")) return cur;
         if (a.startsWith("~")) return cur + Double.parseDouble(a.substring(1).replace(',', '.'));
@@ -301,8 +317,9 @@ public final class FirearmsPlugin extends JavaPlugin {
         if (args.length == 1) return filter(Stream.of("list", "give", "pose", "models", "pack", "check", "host", "clips", "reload", "version"), args[0]);
         if (args[0].equalsIgnoreCase("pose")) {
             if (args.length == 2) return filter(registry.gunIds().stream(), args[1]);
-            if (args.length == 3) return filter(Stream.of("offset", "rotate", "scale", "reset"), args[2]);
-            if (args.length >= 4 && args.length <= 6) return List.of("~", "0");
+            if (args.length == 3) return filter(Stream.of("first", "third", "gui", "ground", "fixed", "head", "offset", "rotate", "scale", "reset"), args[2]);
+            if (args.length == 4 && POSE_CTX.containsKey(args[2].toLowerCase())) return filter(Stream.of("offset", "rotate", "scale", "reset"), args[3]);
+            if (args.length >= 4 && args.length <= 7) return List.of("~", "0");
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("give")) {
             List<String> ids = new ArrayList<>(registry.gunIds());

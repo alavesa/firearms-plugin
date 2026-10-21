@@ -111,10 +111,10 @@ arms:
   left:  { enabled: false, pos: [5.5, 3, 4],      rotation: [-45, 0, 22.5] }
 
 # ---- First-person position of the gun models ----
-# Where a gun sits on the screen = its display transform (Blockbench's Display tab "First Person Right" values, also
-# guns.yml display:). Set it in game with  /firearms pose <gun> offset <x> <y> <z>   (model pixels: +x = right,
-# +y = up, +z = towards you),  /firearms pose <gun> rotate <x> <y> <z>  (degrees),  /firearms pose <gun> scale <s>;
-# "~" keeps a value, "~2" adds 2. They are saved to guns.yml and the pack is rebuilt (re-apply the new pack).
+# Where a gun sits = its display transform per display state (Blockbench's Display tab; guns.yml display:). Set it in
+# game per state:  /firearms pose <gun> [first|third|gui|ground|fixed|head] offset <x> <y> <z>  (model pixels: +x =
+# right, +y = up, +z = towards you) | rotate <x> <y> <z> (degrees) | scale <s> | reset;  "~" keeps a value, "~2" adds
+# 2, no state = first. Saved to guns.yml, the pack is rebuilt and sent to everyone. /firearms pose <gun> lists them.
 display:
   # Minecraft draws every CHARGED crossbow in first person 0.64 blocks to the left and turned 10 degrees (the
   # vanilla crossbow aiming pose). This folds the exact inverse into the gun models, so the display values mean
@@ -219,15 +219,15 @@ anim:
 third-person:
   animate: false
 
-# ---- Flinch animations on a shot player (BetterModel) ----
-# Needs the BetterModel plugin and a player rig: plugins/BetterModel/players/<rig>.bbmodel with animations named
-# below. The animation is picked by hit zone and the side the bullet came from, most specific first:
-#   head_left -> head -> body_left -> body. Unset or missing names fall through. rig: "" = whatever rig the player
-# wears. attach-if-missing: put the rig on a player who is not wearing one, just for the animation.
+# ---- Flinch animations on a shot player (RP Engine emotes) ----
+# Needs the RP Engine plugin. Put a player rig in plugins/Firearms/models/players/<rig>.bbmodel (BetterModel-style
+# player rig: bones ph head, pc/pw/phip body, pra/prfa right arm, pla/plfa left arm, prl/prfl right leg, pll/plfl
+# left leg, player_root) with animations named as below; it is mirrored into RP Engine, which makes every animation
+# the emote "<rig>_<animation>". Hand-written RP Engine emotes work too (their plain id). The emote is picked by hit
+# zone and the side the bullet came from, most specific first: head_left -> head -> body_left -> body.
 hit-animations:
   enabled: true
   rig: player_rig
-  attach-if-missing: false
   animations:
     head: hit_head
     body: hit_body
@@ -241,9 +241,13 @@ hit-animations:
 
 # ---- Resource pack generator ----
 pack:
+  include-hidden-cubes: false   # cubes hidden in Blockbench (eye icon) are left out and reported; true keeps them
   # Getting the pack to players automatically (on join and right after /firearms pack, added on top of the server's
   # other packs). mode:
-  #   auto   - (default) upload, and only if uploading fails fall back to the built-in server. Nothing to configure.
+  #   auto     - (default) rpengine when the RP Engine plugin is installed, else upload, and only if uploading fails
+  #              fall back to the built-in server. Nothing to configure.
+  #   rpengine - the pack is unpacked into plugins/RPEngine/content/firearms and RP Engine merges it into the server's
+  #              one pack, hosts it and sends it (its own host.mode); /firearms pack hands it over and reloads RP Engine.
   #   self   - built-in HTTP server on `port`. The port MUST be reachable by players (open it in the firewall / hosting
   #            panel) and it can NOT be the Minecraft port - the game server owns that one. address: the host or IP
   #            players use to reach the server ("" = the address each player connected with).

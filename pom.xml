@@ -6,7 +6,7 @@
 
   <groupId>fi.alavesa</groupId>
   <artifactId>firearms-plugin</artifactId>
-  <version>0.17.3</version>
+  <version>0.18.0</version>
   <packaging>jar</packaging>
 
   <name>Firearms</name>
@@ -38,11 +38,11 @@
       <scope>test</scope>
     </dependency>
     <dependency>
-      <groupId>kr.toxicity.model</groupId>
-      <artifactId>bettermodel</artifactId>
-      <version>3.5.0</version>
+      <groupId>ai.resourcepack</groupId>
+      <artifactId>rp-engine</artifactId>
+      <version>0.2.22</version>
       <scope>system</scope>
-      <systemPath>${project.basedir}/libs/bettermodel-3.5.0-paper.jar</systemPath>
+      <systemPath>${project.basedir}/libs/RPEngine-0.2.22.jar</systemPath>
     </dependency>
   </dependencies>
 

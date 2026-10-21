@@ -50,8 +50,58 @@ public final class PackHost implements org.bukkit.event.Listener {
     /** The mode in effect right now. */
     public String mode() {
         String m = configuredMode();
-        if (m.equals("auto")) return autoFellBack ? "self" : "upload";
+        if (m.equals("auto")) return rpEngineInstalled() ? "rpengine" : autoFellBack ? "self" : "upload";
         return m;
+    }
+
+    static boolean rpEngineInstalled() {
+        try { Class.forName("ai.resourcepack.engine.api.Models"); } catch (Throwable t) { return false; }
+        return org.bukkit.Bukkit.getPluginManager().getPlugin("RPEngine") != null;
+    }
+
+    /** rpengine mode: unpack Firearms-pack.zip into plugins/RPEngine/content/firearms (assets/ + overrides/) and let
+     *  RP Engine merge, build, host and send it with everything else. Returns true when RP Engine should reload. */
+    public boolean installIntoRpEngine() {
+        File f = zip();
+        if (!f.exists() || !rpEngineInstalled()) return false;
+        File pack = new File(new File(((ai.resourcepack.engine.RPEnginePlugin) org.bukkit.Bukkit.getPluginManager().getPlugin("RPEngine")).getDataFolder(), "content"), "firearms");
+        File assets = new File(pack, "assets"), overrides = new File(pack, "overrides");
+        try {
+            pack.mkdirs();
+            // a pack.yml makes this a regular RP Engine pack (assets/ + overrides/ are copied into its build); without
+            // one the folder would be read as a bare BetterModel plugin folder and only models/ + players/ would count
+            File meta = new File(pack, "pack.yml");
+            String want = "name: Firearms\nauthor: Firearms plugin (generated - do not edit)\nversion: " + plugin.getPluginMeta().getVersion() + "\n";
+            if (!meta.exists() || !Files.readString(meta.toPath()).equals(want)) Files.writeString(meta.toPath(), want);
+            // wipe what we wrote last time (only our two folders), then unpack
+            for (File dir : new File[]{assets, overrides}) if (dir.exists()) deleteTree(dir);
+            boolean any = false;
+            try (java.util.zip.ZipInputStream in = new java.util.zip.ZipInputStream(new java.io.FileInputStream(f))) {
+                java.util.zip.ZipEntry e;
+                while ((e = in.getNextEntry()) != null) {
+                    if (e.isDirectory()) continue;
+                    String n = e.getName().replace('\\', '/');
+                    File out;
+                    if (n.startsWith("assets/firearms/")) out = new File(assets, n.substring("assets/firearms/".length()));
+                    else if (n.startsWith("assets/minecraft/")) out = new File(overrides, n.substring("assets/minecraft/".length()));
+                    else continue;   // pack.mcmeta, pack-report.txt: RP Engine's own
+                    if (!out.toPath().normalize().startsWith(pack.toPath().normalize())) continue;
+                    out.getParentFile().mkdirs();
+                    Files.copy(in, out.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    any = true;
+                }
+            }
+            if (any) { lastProblem = ""; plugin.getLogger().info("Pack host: Firearms pack unpacked into plugins/RPEngine/content/firearms - RP Engine builds, hosts and sends it with the server's pack."); }
+            return any;
+        } catch (Exception e) {
+            lastProblem = "could not hand the pack to RP Engine: " + e.getMessage();
+            plugin.getLogger().warning("Pack host: " + lastProblem);
+            return false;
+        }
+    }
+
+    private static void deleteTree(File dir) throws java.io.IOException {
+        try (var walk = Files.walk(dir.toPath())) { walk.sorted(java.util.Comparator.reverseOrder()).forEach(pth -> pth.toFile().delete()); }
     }
     public int port() { return plugin.getConfig().getInt("pack.host.port", 25580); }
     public File zip() { return new File(plugin.getDataFolder(), "Firearms-pack.zip"); }
@@ -62,10 +112,11 @@ public final class PackHost implements org.bukkit.event.Listener {
         plugin.getServer().getPluginManager().registerEvents(this, plugin);
         refreshHash();
         switch (mode()) {
+            case "rpengine" -> { plugin.getLogger().info("Pack host: RP Engine mode - the Firearms pack is merged into RP Engine's pack (content/firearms) and delivered by RP Engine."); if (installIntoRpEngine()) plugin.getServer().getScheduler().runTask(plugin, () -> { try { ((ai.resourcepack.engine.RPEnginePlugin) org.bukkit.Bukkit.getPluginManager().getPlugin("RPEngine")).reload(); } catch (Throwable t) { plugin.getLogger().warning("RP Engine reload failed: " + t); } }); }
             case "self" -> startServer();
             case "upload" -> { plugin.getLogger().info("Pack host: " + (configuredMode().equals("auto") ? "auto mode - " : "upload mode - ") + "the pack is uploaded to a public file host after each build and that link is sent to players (no port to open)."); plugin.getServer().getScheduler().runTaskAsynchronously(plugin, this::prepareAsync); }
             case "url" -> plugin.getLogger().info("Pack host: url mode - players get " + plugin.getConfig().getString("pack.host.url", "") + " (re-upload the zip there after each /firearms pack).");
-            default -> plugin.getLogger().warning("pack.host.mode must be auto, self, upload or url (is '" + mode() + "') - nothing is sent.");
+            default -> plugin.getLogger().warning("pack.host.mode must be auto, rpengine, self, upload or url (is '" + mode() + "') - nothing is sent.");
         }
     }
 
@@ -172,6 +223,7 @@ public final class PackHost implements org.bukkit.event.Listener {
     /** The URL this player should download, or null (with lastProblem set) when nothing can be sent. */
     public String urlFor(Player p) {
         switch (mode()) {
+            case "rpengine" -> { return "(merged into RP Engine's pack)"; }
             case "self" -> { if (server == null) return null; return "http://" + addressFor(p) + ":" + port() + "/Firearms-pack.zip?v=" + (sha1.isEmpty() ? "0" : sha1.substring(0, 12)); }
             case "upload" -> { if (uploadedUrl.isEmpty() || !uploadedSha1.equals(sha1)) return null; return uploadedUrl; }
             case "url" -> { String u = plugin.getConfig().getString("pack.host.url", ""); return u == null || u.isBlank() ? null : u.trim(); }
@@ -183,6 +235,7 @@ public final class PackHost implements org.bukkit.event.Listener {
         if (!enabled()) return;
         if (sha1.isEmpty()) refreshHash();
         if (sha1.isEmpty()) return;
+        if (mode().equals("rpengine")) return;   // RP Engine sends its merged pack itself
         String url = urlFor(p);
         if (url == null) return;
         try {
@@ -193,13 +246,20 @@ public final class PackHost implements org.bukkit.event.Listener {
         } catch (Exception e) { plugin.getLogger().warning("Could not send the pack to " + p.getName() + ": " + e); }
     }
 
-    public void sendAll() { for (Player p : plugin.getServer().getOnlinePlayers()) send(p); }
+    public void sendAll() {
+        if (mode().equals("rpengine")) {
+            if (installIntoRpEngine()) { try { ((ai.resourcepack.engine.RPEnginePlugin) org.bukkit.Bukkit.getPluginManager().getPlugin("RPEngine")).reload(); } catch (Throwable t) { plugin.getLogger().warning("RP Engine reload failed: " + t); } }
+            return;
+        }
+        for (Player p : plugin.getServer().getOnlinePlayers()) send(p);
+    }
 
     /** One line for /firearms pack and the console: what is being sent and what is wrong. */
     public String status() {
         if (!enabled()) return "pack host disabled (pack.host.enabled: false) - install the pack manually.";
         if (!lastProblem.isEmpty()) return "pack host PROBLEM: " + lastProblem;
         return switch (mode()) {
+            case "rpengine" -> "pack host: RP Engine mode - the Firearms pack is part of RP Engine's pack (plugins/RPEngine/content/firearms) and RP Engine delivers it.";
             case "self" -> server == null ? "pack host not running." : "pack host: built-in server on port " + port() + " (open it to players; address = the one they connect with" + (plugin.getConfig().getString("pack.host.address", "").isBlank() ? "" : ", pack.host.address=" + plugin.getConfig().getString("pack.host.address")) + ").";
             case "upload" -> uploadedUrl.isEmpty() ? "pack host: upload mode, nothing uploaded yet (uploading / run /firearms pack)." : "pack host: " + (configuredMode().equals("auto") ? "auto (upload)" : "upload mode") + ", players get " + uploadedUrl + (uploadedSha1.equals(sha1) ? "" : " (OUTDATED - run /firearms pack)");
             case "url" -> "pack host: url mode, players get " + plugin.getConfig().getString("pack.host.url", "");

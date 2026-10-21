@@ -63,7 +63,9 @@ public final class PackGenerator {
     private final Map<String, String> fpVariant = new LinkedHashMap<>();        // cmd string -> first-person model path (gun + arms)
     private final Map<String, Integer> fpTints = new LinkedHashMap<>();         // cmd string -> number of arm tint indices
     private final Map<String, String> iconOf = new LinkedHashMap<>();           // cmd string -> flat GUI icon model path
-    private final Map<String, String> cmdKind = new LinkedHashMap<>();          // cmd string -> gun / mag / ammo / ... (which items file)
+    private final Map<String, String> cmdKind = new LinkedHashMap<>();
+    private int hiddenSkipped;                                                   // cubes hidden in Blockbench (eye icon) left out
+    private final java.util.Set<String> clampNoted = new java.util.HashSet<>();          // cmd string -> gun / mag / ammo / ... (which items file)
     private final Map<String, String[]> handVariant = new LinkedHashMap<>();    // cmd string -> [classic path, slim path] (hands modelled in the .bbmodel)
     private final Map<String, int[]> handTints = new LinkedHashMap<>();         // cmd string -> [classic tint count, slim tint count]
     private final Map<String, String[]> skinOrder = new LinkedHashMap<>();      // model -> ["u,v;u,v;...", slim list]
@@ -922,7 +924,7 @@ public final class PackGenerator {
         Map<String, Cube> cubes = new LinkedHashMap<>();
         if (root.has("elements")) for (JsonElement ee : root.getAsJsonArray("elements")) {
             JsonObject e = ee.getAsJsonObject();
-            if (e.has("visibility") && !e.get("visibility").getAsBoolean()) continue;
+            if (e.has("visibility") && !e.get("visibility").getAsBoolean() && !plugin.getConfig().getBoolean("pack.include-hidden-cubes", false)) { hiddenSkipped++; continue; }
             if (e.has("type") && "mesh".equals(str(e.get("type"), "cube"))) {
                 // A Blockbench MESH (cylinder wheels, bevelled parts...): Java item models cannot hold it. Approximate
                 // it by its bounding box so the part at least exists, and say so.
@@ -1038,7 +1040,9 @@ public final class PackGenerator {
         if (composite) {
             comp.emit(name, mpath, null, 0, false);
             cmdToModel.put(name, mpath + "__b0");   // a real model path is still needed for the report / validation
-            report.add(name + ": composite mode - " + comp.partCount() + " part(s), bone rotations exact (no 22.5 steps)");
+            report.add(name + ": composite mode - " + comp.partCount() + " part(s), bone rotations exact (no 22.5 steps)" + (hiddenSkipped > 0 ? "; " + hiddenSkipped + " cube(s) hidden in Blockbench left out (pack.include-hidden-cubes: true keeps them)" : ""));
+            if (hiddenSkipped > 0) warnings.add(name + ": " + hiddenSkipped + " cube(s) are hidden in Blockbench (eye icon) and were left out - unhide them, or set pack.include-hidden-cubes: true");
+            hiddenSkipped = 0;
         } else {
             JsonObject rest = bake(name, cubesPlain, bones, null, textures, texIndex, texRes, display, null, 0, S, null);
             put("assets/" + NS + "/models/item/" + mpath + ".json", GSON.toJson(rest));
@@ -1867,8 +1871,11 @@ public final class PackGenerator {
                     double m = (bs[0] + bs[1] + bs[2]) / 3;
                     double[] off = { Pw[0] - 8, Pw[1] - 8, Pw[2] - 8 };
                     double[] ro = { Rd[0][0]*off[0]+Rd[0][1]*off[1]+Rd[0][2]*off[2], Rd[1][0]*off[0]+Rd[1][1]*off[1]+Rd[1][2]*off[2], Rd[2][0]*off[0]+Rd[2][1]*off[1]+Rd[2][2]*off[2] };
+                    double[] tr3 = { bt[0] + m * ro[0], bt[1] + m * ro[1], bt[2] + m * ro[2] };
+                    if ((Math.abs(tr3[0]) > 80 || Math.abs(tr3[1]) > 80 || Math.abs(tr3[2]) > 80) && clampNoted.add(name + "|" + ctx))
+                        warnings.add(name + ": a part sits " + Math.round(Math.max(Math.abs(tr3[0]), Math.max(Math.abs(tr3[1]), Math.abs(tr3[2])))) + " px from the model centre in '" + ctx + "' - beyond the client's 80 px limit, so it is drawn out of place (floating). Shrink the display scale for that state (/firearms pose " + name + " " + ctx.replace("person_righthand", "").replace("person_lefthand", "") + " scale ...) or move the geometry nearer the centre");
                     disp.add(ctx, transform(eul,
-                        new double[]{ clamp80(bt[0] + m * ro[0]), clamp80(bt[1] + m * ro[1]), clamp80(bt[2] + m * ro[2]) },
+                        new double[]{ clamp80(tr3[0]), clamp80(tr3[1]), clamp80(tr3[2]) },
                         new double[]{ Math.min(4, bs[0] / part.k), Math.min(4, bs[1] / part.k), Math.min(4, bs[2] / part.k) }));
                 }
                 String wrapPath = framePath + "__b" + part.suffix;
