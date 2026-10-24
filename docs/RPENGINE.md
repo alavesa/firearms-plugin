@@ -3,6 +3,20 @@
 Since 0.18 the plugin hands its models to [RP Engine](https://hangar.papermc.io/ResourcePackAI/RPEngine), which builds
 one resource pack for the whole server, hosts it and sends it to players. BetterModel is not used anymore.
 
+## How the pieces fit
+
+```mermaid
+flowchart LR
+    F["Firearms plugin<br/>models/*.bbmodel + players rig<br/>/firearms pack bakes the frames"] -->|unpack, reload| CF["content/firearms<br/>pack.yml, assets/, overrides/<br/>players/ rig becomes emotes"]
+    V["Vehicle plugin<br/>models/*.bbmodel<br/>free-rotated cubes get own bones"] -->|copy, reload| CV["content/vehicle<br/>models/*.bbmodel<br/>item id vehicle:name"]
+    CF --> R["RP Engine<br/>merges every content pack<br/>builds one bundle and hosts it<br/>binds models, plays animations and emotes"]
+    CV --> R
+    R -->|sends the pack on join| P["Players"]
+```
+
+Each plugin only writes files into its own folder under `plugins/RPEngine/content` and asks RP Engine to reload;
+at runtime the plugins also call RP Engine's API to bind a model to an entity, play an animation or start an emote.
+
 ## What `/firearms pack` does
 
 1. Every `.bbmodel` in `plugins/Firearms/models` is converted; each animation is baked into frames, one sub-model per

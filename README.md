@@ -13,3 +13,7 @@ Ray-based guns plugin for Paper 26.x (compiled against the 1.21.4 API, boot-test
 - `.bbmodel` → resource pack: drop Blockbench files in `plugins/Firearms/models/`, run `/firearms pack`; every animation is baked to frames automatically
 
 Commands: `/firearms list | give <id> [n] [player] | models | pack | reload`
+
+## RP Engine
+
+Since 0.18 models are built and delivered through RP Engine; see [docs/RPENGINE.md](docs/RPENGINE.md) for how it works and how to set it up.
