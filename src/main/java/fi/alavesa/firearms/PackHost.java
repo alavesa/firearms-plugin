@@ -73,6 +73,11 @@ public final class PackHost implements org.bukkit.event.Listener {
             File meta = new File(pack, "pack.yml");
             String want = "name: Firearms\nauthor: Firearms plugin (generated - do not edit)\nversion: " + plugin.getPluginMeta().getVersion() + "\n";
             if (!meta.exists() || !Files.readString(meta.toPath()).equals(want)) Files.writeString(meta.toPath(), want);
+            // unchanged since the last hand-over? (same zip hash) then nothing to do and no rebuild needed
+            File stamp = new File(pack, ".firearms-sha1");
+            refreshHash();
+            String content = contentSha1(f);   // the models/textures only: pack-report.txt changes on every build
+            if (stamp.exists() && Files.readString(stamp.toPath()).trim().equals(content) && assets.exists()) { handoverChanged = false; return true; }
             // wipe what we wrote last time (only our two folders), then unpack
             for (File dir : new File[]{assets, overrides}) if (dir.exists()) deleteTree(dir);
             boolean any = false;
@@ -91,13 +96,27 @@ public final class PackHost implements org.bukkit.event.Listener {
                     any = true;
                 }
             }
-            if (any) { lastProblem = ""; plugin.getLogger().info("Pack host: Firearms pack unpacked into plugins/RPEngine/content/firearms - RP Engine builds, hosts and sends it with the server's pack."); }
+            if (any) { lastProblem = ""; Files.writeString(stamp.toPath(), content); handoverChanged = true; plugin.getLogger().info("Pack host: Firearms pack unpacked into plugins/RPEngine/content/firearms - RP Engine builds, hosts and sends it with the server's pack."); }
             return any;
         } catch (Exception e) {
             lastProblem = "could not hand the pack to RP Engine: " + e.getMessage();
             plugin.getLogger().warning("Pack host: " + lastProblem);
             return false;
         }
+    }
+
+    /** SHA-1 over the zip's asset entries (names + bytes), ignoring pack-report.txt and pack.mcmeta. */
+    private static String contentSha1(File zip) throws Exception {
+        MessageDigest md = MessageDigest.getInstance("SHA-1");
+        try (java.util.zip.ZipInputStream in = new java.util.zip.ZipInputStream(new java.io.FileInputStream(zip))) {
+            java.util.zip.ZipEntry e;
+            while ((e = in.getNextEntry()) != null) {
+                if (e.isDirectory() || !e.getName().startsWith("assets/")) continue;
+                md.update(e.getName().getBytes(StandardCharsets.UTF_8));
+                md.update(in.readAllBytes());
+            }
+        }
+        return HexFormat.of().formatHex(md.digest());
     }
 
     private static void deleteTree(File dir) throws java.io.IOException {
@@ -112,7 +131,7 @@ public final class PackHost implements org.bukkit.event.Listener {
         plugin.getServer().getPluginManager().registerEvents(this, plugin);
         refreshHash();
         switch (mode()) {
-            case "rpengine" -> { plugin.getLogger().info("Pack host: RP Engine mode - the Firearms pack is merged into RP Engine's pack (content/firearms) and delivered by RP Engine."); if (installIntoRpEngine()) plugin.getServer().getScheduler().runTask(plugin, () -> { try { ((ai.resourcepack.engine.RPEnginePlugin) org.bukkit.Bukkit.getPluginManager().getPlugin("RPEngine")).reload(); } catch (Throwable t) { plugin.getLogger().warning("RP Engine reload failed: " + t); } }); }
+            case "rpengine" -> { plugin.getLogger().info("Pack host: RP Engine mode - the Firearms pack is merged into RP Engine's pack (content/firearms) and delivered by RP Engine."); if (installIntoRpEngine() && handoverChanged) plugin.getServer().getScheduler().runTask(plugin, this::reloadRpEngine); }
             case "self" -> startServer();
             case "upload" -> { plugin.getLogger().info("Pack host: " + (configuredMode().equals("auto") ? "auto mode - " : "upload mode - ") + "the pack is uploaded to a public file host after each build and that link is sent to players (no port to open)."); plugin.getServer().getScheduler().runTaskAsynchronously(plugin, this::prepareAsync); }
             case "url" -> plugin.getLogger().info("Pack host: url mode - players get " + plugin.getConfig().getString("pack.host.url", "") + " (re-upload the zip there after each /firearms pack).");
@@ -246,12 +265,40 @@ public final class PackHost implements org.bukkit.event.Listener {
         } catch (Exception e) { plugin.getLogger().warning("Could not send the pack to " + p.getName() + ": " + e); }
     }
 
+    private org.bukkit.scheduler.BukkitTask pendingReload;
+    private boolean handoverChanged;
+
+    /** RP Engine rebuilds and zips the whole merged bundle inside reload(), on the main thread: with a big pack that
+     *  is many seconds in which the server does not tick (Paper's watchdog prints a thread dump after 50 s, no crash).
+     *  So the reload is batched: it runs `pack.host.rpengine-reload-delay` seconds after the LAST pack build, several
+     *  /firearms pose tweaks in a row cost one pause, and admins are told it is coming. 0 = reload immediately,
+     *  -1 = never reload from here (run /rp reload yourself, e.g. at a quiet time). */
     public void sendAll() {
         if (mode().equals("rpengine")) {
-            if (installIntoRpEngine()) { try { ((ai.resourcepack.engine.RPEnginePlugin) org.bukkit.Bukkit.getPluginManager().getPlugin("RPEngine")).reload(); } catch (Throwable t) { plugin.getLogger().warning("RP Engine reload failed: " + t); } }
+            if (!installIntoRpEngine()) return;
+            if (!handoverChanged) { plugin.getLogger().info("Pack host: the Firearms pack is unchanged - RP Engine keeps its current build."); return; }
+            int delay = plugin.getConfig().getInt("pack.host.rpengine-reload-delay", 20);
+            if (delay < 0) { notifyAdmins("Firearms pack handed to RP Engine - run /rp reload when convenient (the server pauses while RP Engine rebuilds its pack)."); return; }
+            if (pendingReload != null && !pendingReload.isCancelled()) pendingReload.cancel();
+            if (delay == 0) { reloadRpEngine(); return; }
+            notifyAdmins("Firearms pack handed to RP Engine - it rebuilds in " + delay + " s (the server pauses for the rebuild; more /firearms pose changes before then are batched into the same rebuild).");
+            pendingReload = plugin.getServer().getScheduler().runTaskLater(plugin, () -> { pendingReload = null; reloadRpEngine(); }, delay * 20L);
             return;
         }
         for (Player p : plugin.getServer().getOnlinePlayers()) send(p);
+    }
+
+    private void reloadRpEngine() {
+        long t0 = System.currentTimeMillis();
+        try { ((ai.resourcepack.engine.RPEnginePlugin) org.bukkit.Bukkit.getPluginManager().getPlugin("RPEngine")).reload(); } catch (Throwable t) { plugin.getLogger().warning("RP Engine reload failed: " + t); return; }
+        long ms = System.currentTimeMillis() - t0;
+        plugin.getLogger().info("RP Engine rebuilt its pack in " + ms + " ms (the server did not tick meanwhile).");
+        if (ms > 5000) notifyAdmins("RP Engine took " + (ms / 1000) + " s to rebuild the pack (the server paused). Fewer files help: keep anim.max-frames modest and let unmoved parts share files (automatic); or set pack.host.rpengine-reload-delay: -1 and run /rp reload at quiet times.");
+    }
+
+    private void notifyAdmins(String msg) {
+        plugin.getLogger().info(msg);
+        for (Player a : plugin.getServer().getOnlinePlayers()) if (a.hasPermission("firearms.admin")) a.sendMessage(Component.text("[Firearms] " + msg, NamedTextColor.YELLOW));
     }
 
     /** One line for /firearms pack and the console: what is being sent and what is wrong. */

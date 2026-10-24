@@ -259,6 +259,12 @@ pack:
   host:
     enabled: true
     mode: auto
+    # rpengine mode: RP Engine rebuilds and zips the WHOLE merged pack inside its reload, on the main thread - the
+    # server does not tick meanwhile (a big pack = many seconds; Paper's watchdog prints "has not responded" after
+    # 50 s, which is not a crash). The reload is therefore batched: it runs this many seconds after the last
+    # /firearms pack or pose change, so a tuning session costs one pause. 0 = at once, -1 = never from here
+    # (run /rp reload yourself at a quiet time; the files are already in place).
+    rpengine-reload-delay: 20
     port: 25580
     address: ""
     url: ""

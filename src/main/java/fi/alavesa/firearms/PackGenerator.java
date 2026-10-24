@@ -65,6 +65,7 @@ public final class PackGenerator {
     private final Map<String, String> iconOf = new LinkedHashMap<>();           // cmd string -> flat GUI icon model path
     private final Map<String, String> cmdKind = new LinkedHashMap<>();
     private int hiddenSkipped;                                                   // cubes hidden in Blockbench (eye icon) left out
+    private int reusedWrappersTotal;                                            // frame parts that reused the rest-pose file
     private final java.util.Set<String> clampNoted = new java.util.HashSet<>();          // cmd string -> gun / mag / ammo / ... (which items file)
     private final Map<String, String[]> handVariant = new LinkedHashMap<>();    // cmd string -> [classic path, slim path] (hands modelled in the .bbmodel)
     private final Map<String, int[]> handTints = new LinkedHashMap<>();         // cmd string -> [classic tint count, slim tint count]
@@ -159,6 +160,7 @@ public final class PackGenerator {
         report.add("");
         report.add("warnings:");
         if (warnings.isEmpty()) report.add("  none"); else for (String w : warnings) report.add("  ! " + w);
+        if (reusedWrappersTotal > 0) report.add("frames: " + reusedWrappersTotal + " unmoved part(s) share their rest-pose file instead of a copy per frame (fewer files for RP Engine to zip)");
         put("pack-report.txt", String.join("\n", report));
         if (!dryRun) try { Files.writeString(new File(plugin.getDataFolder(), "pack-report.txt").toPath(), String.join("\n", report)); } catch (IOException ignored) { }
 
@@ -1850,6 +1852,9 @@ public final class PackGenerator {
         /** Emit one pose (rest when clip == null, else the clip at time t): wrappers per part + composite lists. */
         /** The rest pose's parts (no hands, no flash): what every context except first person shows for every frame. */
         List<Object[]> restPlain;
+        /** part suffix -> {rest wrapper path, its display json}: a frame part that did not move reuses the rest file. */
+        final Map<String, String[]> restWrappers = new HashMap<>();
+        int reusedWrappers;
 
         void emit(String cmd, String framePath, Clip clip, double t, boolean flashFrame) {
             Map<Bone, double[][]> cache = new HashMap<>();
@@ -1882,7 +1887,11 @@ public final class PackGenerator {
                 JsonObject wrap = new JsonObject();
                 wrap.addProperty("parent", NS + ":item/" + part.geomPath());
                 wrap.add("display", disp);
-                put("assets/" + NS + "/models/item/" + wrapPath + ".json", GSON.toJson(wrap));
+                String wrapJson = GSON.toJson(wrap);
+                String[] rest = restWrappers.get(part.suffix);
+                if (clip == null) restWrappers.put(part.suffix, new String[]{wrapPath, wrapJson});
+                else if (rest != null && rest[1].equals(wrapJson)) { wrapPath = rest[0]; reusedWrappers++; reusedWrappersTotal++; }   // the part did not move: no new file
+                if (clip == null || rest == null || !rest[1].equals(wrapJson)) put("assets/" + NS + "/models/item/" + wrapPath + ".json", wrapJson);
                 Object[] entry = { wrapPath, part.tints };
                 if (part.variant == 1) classic.add(entry);
                 else if (part.variant == 2) slimL.add(entry);
