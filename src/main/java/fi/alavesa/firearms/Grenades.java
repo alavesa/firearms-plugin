@@ -228,6 +228,8 @@ public final class Grenades implements Listener {
                         le.damage(amount, t.thrower);
                         if (!le.isDead() && le.getHealth() >= hp - 0.001 && plugin.getConfig().getBoolean("bypass-pvp", true)) { le.setNoDamageTicks(0); le.damage(amount); }
                     } finally { Ballistics.applyingDamage = false; }
+                    plugin.getServer().getPluginManager().callEvent(new fi.alavesa.firearms.api.FirearmsHitEvent(
+                        fi.alavesa.firearms.api.FirearmsHitEvent.Kind.FRAG, t.thrower, le, t.type.id(), "", "body", amount, le.getLocation(), 0));
                     le.setVelocity(le.getVelocity().add(to.normalize().multiply(0.6 * (1 - d / t.type.radius())).setY(0.25)));
                 }
             }

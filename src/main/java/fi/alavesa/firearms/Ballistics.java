@@ -181,6 +181,10 @@ public final class Ballistics {
                     }
                 }
             } finally { applyingDamage = false; }
+            // tell injury / stats plugins (players are hurt quietly: no EntityDamageEvent to listen to)
+            String ammo = gun.usesMag() ? (registry.mag(gun.magId()) != null ? registry.mag(gun.magId()).ammoId() : "") : gun.ammoId();
+            plugin.getServer().getPluginManager().callEvent(new fi.alavesa.firearms.api.FirearmsHitEvent(
+                fi.alavesa.firearms.api.FirearmsHitEvent.Kind.BULLET, shooter, target, gun.id(), ammo, zone, amount, hit.point.clone(), hit.penetrations));
             if (shooter != null && shooter.isOnline()) {
                 shooter.playSound(shooter.getLocation(), "minecraft:entity.arrow.hit_player", 0.6f, zone.equals("head") ? 1.9f : 1.4f);
             }
