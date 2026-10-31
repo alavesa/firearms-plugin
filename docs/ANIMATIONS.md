@@ -118,3 +118,14 @@ one rigid object). The items file selects those frame parts only for `firstperso
 `thirdperson_*`, `ground`, `fixed`, `head` and the GUI fallback get the rest pose, without hands or flash. Hands
 modelled in the .bbmodel (see HANDS.md) are therefore invisible to other players. `third-person.animate: true` in
 config.yml shows the frames in third person too.
+
+## Aiming clips and reload variants (0.19)
+
+Right-click aims down the sight. Three clips drive it: `aim_in` (plays once when the sight comes up), `aim` (loops
+for as long as the player aims - a one-frame clip is simply the aiming pose) and `aim_out` (once, on the way back).
+Keywords: aim_in / ads_in / scope_in, aim / ads / scope / aiming / sight, aim_out / ads_out / scope_out. Firing or
+reloading while aiming plays that clip and returns to the aim loop.
+
+Reload animations can come in several versions: every animation whose name matches the reload keywords is baked
+(`reload`, `reload_2`, `reload_3` ... in name order) and one is picked at random each reload. Other clips take the
+best-matching name only; add a clip to `anim.random-variants` in config.yml to give it variants too.

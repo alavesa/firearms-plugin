@@ -1056,12 +1056,13 @@ public final class PackGenerator {
         // --- animations -> frames
         int frameTicks = Math.max(1, plugin.getConfig().getInt("anim.frame-ticks", 1));
         Map<String, int[]> clips = new LinkedHashMap<>();
-        if (root.has("animations")) for (JsonElement ae : pickAnimations(name, root.getAsJsonArray("animations"))) {
+        if (root.has("animations")) for (var picked : pickAnimations(name, root.getAsJsonArray("animations"))) {
+            JsonElement ae = picked.getValue();
             JsonObject a = ae.getAsJsonObject();
             Clip clip = new Clip();
             clip.name = str(a.get("name"), "anim");
             clip.length = num(a.get("length"), 0);
-            String key = clipKey(clip.name);
+            String key = picked.getKey();
             if (clips.containsKey(key)) { warnings.add(name + ": animation '" + clip.name + "' ignored - '" + key + "' already has one"); continue; }
             List<String> clipSounds = new ArrayList<>();
             if (a.has("animators")) for (var en : a.getAsJsonObject("animators").entrySet()) {
@@ -1113,7 +1114,7 @@ public final class PackGenerator {
                 String fname = name + "_" + key + "_" + i;
                 if (composite) {
                     comp.emit(fname, mpath + "_" + key + "_" + i, clip, t, flashFrame);
-                    cmdToModel.put(fname, mpath + "_" + key + "_" + i + "__b0");
+                    cmdToModel.put(fname, comp.lastPrimary != null ? comp.lastPrimary : mpath + "_" + key + "_" + i + "__b0");
                 } else {
                     Bone rb = pickRoot(topBones, clip);
                     JsonObject frame = bake(name, cubesPlain, bones, rb, textures, texIndex, texRes, display, clip, t, S, flashFrame ? flashAt : null);
@@ -1137,23 +1138,32 @@ public final class PackGenerator {
 
     /** When several animations map to the same clip, the best-matching NAME wins (exact "inspect" beats "inspection_idle"),
      *  not the one that happens to come first in the file. The losers are reported. */
-    private List<JsonElement> pickAnimations(String model, JsonArray anims) {
-        Map<String, JsonElement> best = new LinkedHashMap<>();
-        Map<String, Integer> bestScore = new HashMap<>();
-        List<String> dropped = new ArrayList<>();
+    /** Which animation plays which clip: the best-scoring name per clip, except clips listed in anim.random-variants
+     *  (reload by default), where EVERY matching animation is kept as a variant - reload, reload_2, reload_3 ... -
+     *  and the plugin picks one at random each time. */
+    private List<Map.Entry<String, JsonElement>> pickAnimations(String model, JsonArray anims) {
+        java.util.Set<String> variantClips = new java.util.HashSet<>(lower(plugin.getConfig().getStringList("anim.random-variants")));
+        if (!plugin.getConfig().contains("anim.random-variants")) variantClips.add("reload");
+        Map<String, List<JsonElement>> byKey = new LinkedHashMap<>();
+        Map<JsonElement, Integer> scores = new HashMap<>();
         for (JsonElement ae : anims) {
-            JsonObject a = ae.getAsJsonObject();
-            String n = str(a.get("name"), "anim");
-            String key = clipKey(n);
-            int score = clipScore(n);
-            Integer cur = bestScore.get(key);
-            if (cur == null || score > cur) {
-                if (best.containsKey(key)) dropped.add(str(best.get(key).getAsJsonObject().get("name"), "?") + " (" + key + " is '" + n + "')");
-                best.put(key, ae); bestScore.put(key, score);
-            } else dropped.add(n + " (" + key + " is '" + str(best.get(key).getAsJsonObject().get("name"), "?") + "')");
+            String n = str(ae.getAsJsonObject().get("name"), "anim");
+            byKey.computeIfAbsent(clipKey(n), x -> new ArrayList<>()).add(ae);
+            scores.put(ae, clipScore(n));
         }
-        for (String d : dropped) warnings.add(model + ": animation ignored: " + d);
-        return new ArrayList<>(best.values());
+        List<Map.Entry<String, JsonElement>> out = new ArrayList<>();
+        for (var e : byKey.entrySet()) {
+            List<JsonElement> list = new ArrayList<>(e.getValue());
+            list.sort((a, b) -> { int d = scores.get(b) - scores.get(a); return d != 0 ? d : str(a.getAsJsonObject().get("name"), "").compareToIgnoreCase(str(b.getAsJsonObject().get("name"), "")); });
+            if (variantClips.contains(e.getKey())) {
+                for (int i = 0; i < list.size(); i++) out.add(Map.entry(i == 0 ? e.getKey() : e.getKey() + "_" + (i + 1), list.get(i)));
+                if (list.size() > 1) report.add(model + ": " + list.size() + " '" + e.getKey() + "' variants play at random");
+            } else {
+                out.add(Map.entry(e.getKey(), list.get(0)));
+                for (int i = 1; i < list.size(); i++) warnings.add(model + ": animation ignored: " + str(list.get(i).getAsJsonObject().get("name"), "?") + " (" + e.getKey() + " is '" + str(list.get(0).getAsJsonObject().get("name"), "?") + "'; list the clip under anim.random-variants to play all of them)");
+            }
+        }
+        return out;
     }
 
     /** Bounding-box cube for a Blockbench mesh element (vertices are relative to its origin). */
@@ -1322,6 +1332,9 @@ public final class PackGenerator {
         DEFAULT_NAMES.put("equip", List.of("equip", "draw", "deploy", "pull", "ready"));
         DEFAULT_NAMES.put("pump", List.of("pump", "rack", "cock", "bolt", "cycle"));
         DEFAULT_NAMES.put("inspect", List.of("inspect", "look", "check"));
+        DEFAULT_NAMES.put("aim_in", List.of("aim_in", "ads_in", "scope_in", "aim in", "aimin"));
+        DEFAULT_NAMES.put("aim_out", List.of("aim_out", "ads_out", "scope_out", "aim out", "aimout"));
+        DEFAULT_NAMES.put("aim", List.of("aim", "ads", "scope", "aiming", "sight"));
     }
 
     /** Which clip an animation name belongs to. Keywords come from guns.yml `anim-names:` (per gun), then config
@@ -1749,7 +1762,7 @@ public final class PackGenerator {
             // coordinate outside the Java range is rejected by the client as a whole (purple cube).
             double far = 0;
             for (Cube c : part.cubes) {
-                int[][] Pe = part.soloCube == c ? identityPerm() : nearestPerm(rot3(c.rotation));
+                int[][] Pe = part.soloCube == c ? CubeMath.identityPerm() : CubeMath.element(c.rotation).perm();
                 for (int corner = 0; corner < 8; corner++) {
                     double[] v = { ((corner & 1) == 0 ? c.from[0] - c.inflate : c.to[0] + c.inflate) - c.origin[0],
                                    ((corner & 2) == 0 ? c.from[1] - c.inflate : c.to[1] + c.inflate) - c.origin[1],
@@ -1762,12 +1775,10 @@ public final class PackGenerator {
             int localTint = 0;
             for (Cube c : part.cubes) {
                 boolean solo = part.soloCube == c;            // its rotation lives in the display transform
-                double[][] Re = solo ? rot3(new double[]{0, 0, 0}) : rot3(c.rotation);
-                int[][] Pe = nearestPerm(Re);
-                double[] eulE = euler3(mul3(transpose3(Pe), Re));
-                int ca = 0;
-                for (int i = 1; i < 3; i++) if (Math.abs(eulE[i]) > Math.abs(eulE[ca])) ca = i;
-                double cs = Math.max(-45, Math.min(45, Math.round(eulE[ca] / 22.5) * 22.5));
+                CubeMath.Element el = solo ? CubeMath.plain() : CubeMath.element(c.rotation);
+                int[][] Pe = el.perm();
+                int ca = el.axis();
+                double cs = el.angle();
                 double[] lo = {1e9, 1e9, 1e9}, hi = {-1e9, -1e9, -1e9};
                 for (int corner = 0; corner < 8; corner++) {
                     double[] v = { ((corner & 1) == 0 ? c.from[0] - c.inflate : c.to[0] + c.inflate) - c.origin[0],
@@ -1855,9 +1866,12 @@ public final class PackGenerator {
         /** part suffix -> {rest wrapper path, its display json}: a frame part that did not move reuses the rest file. */
         final Map<String, String[]> restWrappers = new HashMap<>();
         int reusedWrappers;
+        /** The first part wrapper of the last emit (frames whose parts all share rest files point here). */
+        String lastPrimary;
 
         void emit(String cmd, String framePath, Clip clip, double t, boolean flashFrame) {
             Map<Bone, double[][]> cache = new HashMap<>();
+            lastPrimary = null;
             List<Object[]> plain = new ArrayList<>(), classic = new ArrayList<>(), slimL = new ArrayList<>();
             for (Part part : parts) {
                 if ((part.variant == 3 || part.variant == 4) && !flashFrame) continue;
@@ -1892,6 +1906,7 @@ public final class PackGenerator {
                 if (clip == null) restWrappers.put(part.suffix, new String[]{wrapPath, wrapJson});
                 else if (rest != null && rest[1].equals(wrapJson)) { wrapPath = rest[0]; reusedWrappers++; reusedWrappersTotal++; }   // the part did not move: no new file
                 if (clip == null || rest == null || !rest[1].equals(wrapJson)) put("assets/" + NS + "/models/item/" + wrapPath + ".json", wrapJson);
+                if (lastPrimary == null) lastPrimary = wrapPath;
                 Object[] entry = { wrapPath, part.tints };
                 if (part.variant == 1) classic.add(entry);
                 else if (part.variant == 2) slimL.add(entry);
@@ -1909,18 +1924,8 @@ public final class PackGenerator {
         }
     }
 
-    /** Can a Java element hold this cube's rotation exactly (one axis, multiple of 22.5, |a| <= 45)? */
-    private static boolean exactRotation(Cube c) {
-        if (c.rotation[0] == 0 && c.rotation[1] == 0 && c.rotation[2] == 0) return true;
-        double[][] R = rot3(c.rotation);
-        int[][] P = nearestPerm(R);
-        double[] e = euler3(mul3(transpose3(P), R));
-        int a = 0;
-        for (int i = 1; i < 3; i++) if (Math.abs(e[i]) > Math.abs(e[a])) a = i;
-        for (int i = 0; i < 3; i++) if (i != a && Math.abs(e[i]) > 0.5) return false;
-        double snapped = Math.round(e[a] / 22.5) * 22.5;
-        return Math.abs(e[a] - snapped) < 0.5 && Math.abs(snapped) <= 45;
-    }
+    /** Can a Java element hold this cube's rotation exactly (after the 90-degree split: one axis at a 22.5 step)? */
+    private static boolean exactRotation(Cube c) { return CubeMath.exact(c.rotation); }
 
     private static double[][] rotXYZ(double[] deg) {
         double x = Math.toRadians(deg[0]), y = Math.toRadians(deg[1]), z = Math.toRadians(deg[2]);

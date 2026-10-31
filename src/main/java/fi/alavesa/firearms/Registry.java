@@ -293,21 +293,21 @@ public final class Registry {
         return m.getOrDefault(clip, List.of());
     }
 
-    /** Is this gun item in AUTO mode right now (per-item for switchable guns, else the gun's default)? */
-    public boolean isAuto(ItemStack it, GunType gun) {
-        if (!gun.switchable() || it == null || !it.hasItemMeta()) return gun.auto();
-        String m = it.getItemMeta().getPersistentDataContainer().get(new NamespacedKey(plugin, "mode"), PersistentDataType.STRING);
-        return m == null ? gun.auto() : m.equals("auto");
+    /** Is this gun AUTO? The fire mode is the gun's own (guns.yml fire-mode); right-click aims since 0.19. */
+    public boolean isAuto(ItemStack it, GunType gun) { return gun.auto(); }
+
+    /** One of a clip's random variants ("reload", "reload_2", ...) that exists for this model; the clip itself if none. */
+    public String pickVariant(String model, String clip) {
+        Map<String, int[]> c = anims.get(model);
+        if (c == null) return clip;
+        List<String> have = new ArrayList<>();
+        for (String k : c.keySet()) if (k.equals(clip) || k.matches(java.util.regex.Pattern.quote(clip) + "_\\d+")) if (c.get(k)[0] > 0) have.add(k);
+        if (have.isEmpty()) return clip;
+        return have.get(java.util.concurrent.ThreadLocalRandom.current().nextInt(have.size()));
     }
 
-    /** Flip a switchable gun between semi and auto. Returns the new mode name. */
-    public String toggleMode(ItemStack it, GunType gun) {
-        boolean auto = !isAuto(it, gun);
-        ItemMeta meta = it.getItemMeta();
-        meta.getPersistentDataContainer().set(new NamespacedKey(plugin, "mode"), PersistentDataType.STRING, auto ? "auto" : "semi");
-        it.setItemMeta(meta);
-        return auto ? "AUTO" : "SEMI";
-    }
+    /** Every clip key the pack baked for a model (fire, reload, reload_2, aim ...). */
+    public List<String> clipKeys(String model) { Map<String, int[]> c = anims.get(model); return c == null ? List.of() : new ArrayList<>(c.keySet()); }
 
     /** The casing model a gun ejects: models/<gunmodel>_casing.bbmodel if that file exists, else guns.yml casing:
      *  (default "casing"), or null for "none". */
@@ -386,7 +386,7 @@ public final class Registry {
         if (meta instanceof org.bukkit.inventory.meta.CrossbowMeta cb) cb.addChargedProjectile(new ItemStack(Material.ARROW));   // "charged" = aiming pose
         meta.displayName(name(gun.name()));
         List<Component> lore = new ArrayList<>();
-        lore.add(Component.text(gun.switchable() ? "SEMI / AUTO - right-click to switch" : gun.auto() ? "AUTO - hold left-click" : "SEMI - one shot per click", NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false));
+        lore.add(Component.text(gun.auto() ? "AUTO - hold left-click" : "SEMI - one shot per click", NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false));
         lore.add(Component.text(gun.usesMag() ? "Magazine: " + gun.magId() : "Loads " + gun.ammoId() + " one by one", NamedTextColor.DARK_GRAY).decoration(TextDecoration.ITALIC, false));
         // Stat sheet on a 0-10 scale (10 = the configured maximum, config stats.max.*), so guns are comparable at a glance.
         ConfigurationSection mx = plugin.getConfig().getConfigurationSection("stats.max");

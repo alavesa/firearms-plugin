@@ -28,7 +28,7 @@ import java.util.UUID;
  * packs the server already sends, under a fixed id so re-sending replaces only ours. Three ways (pack.host.mode):
  *   self   - a built-in HTTP server on pack.host.port (the port must be reachable by players; it can NOT be the
  *            Minecraft port, that one is taken by the server itself)
- *   upload - after every pack build the zip is uploaded to a public file host (catbox.moe, 0x0.st as fallback)
+ *   upload - after every pack build the zip is uploaded to a public file host (catbox.moe)
  *            and that link is sent; no port to open
  *   url    - you host the zip yourself at pack.host.url (re-upload after each /firearms pack)
  */
@@ -185,7 +185,6 @@ public final class PackHost implements org.bukkit.event.Listener {
         File f = zip();
         String url = null;
         try { url = uploadCatbox(f); } catch (Exception e) { plugin.getLogger().warning("catbox.moe upload failed: " + e.getMessage()); }
-        if (url == null) try { url = upload0x0(f); } catch (Exception e) { plugin.getLogger().warning("0x0.st upload failed: " + e.getMessage()); }
         if (url == null) {
             if (configuredMode().equals("auto") && !autoFellBack) {
                 autoFellBack = true;
@@ -227,7 +226,6 @@ public final class PackHost implements org.bukkit.event.Listener {
     }
 
     private String uploadCatbox(File f) throws Exception { return post("https://catbox.moe/user/api.php", "fileToUpload", f, "reqtype", "fileupload"); }
-    private String upload0x0(File f) throws Exception { return post("https://0x0.st", "file", f); }
 
     /** The host players reach us by: config pack.host.address, else the address this player connected with. */
     String addressFor(Player p) {
