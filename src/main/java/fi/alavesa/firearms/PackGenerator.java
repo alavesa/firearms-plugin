@@ -1183,12 +1183,14 @@ public final class PackGenerator {
             if (clips.containsKey(key)) { warnings.add(name + ": animation '" + clip.name + "' ignored - '" + key + "' already has one"); continue; }
             clipNameIndex.computeIfAbsent(name, x -> new LinkedHashMap<>()).put(key, clip.name);
             int maxFrames = Math.max(2, plugin.getConfig().getInt("anim.max-frames", 200));
+            if (maxFrames == 120 && !plugin.getConfig().contains("anim.fps.default")) maxFrames = 200;   // the pre-0.21 default in an older config file
             if (currentGun != null && currentGun.animCfg() != null && currentGun.animCfg().contains("max-frames")) maxFrames = Math.max(2, currentGun.animCfg().getInt("max-frames"));
             int ticksTotal = Math.max(1, (int) Math.round(clip.length * 20.0));
             // frames per second: guns.yml anim.<clip>.fps, else config anim.fps.<clip> / anim.fps.default (20 = one per tick)
             String baseKey = key.replaceAll("_\\d+$", "");
             double fps = plugin.getConfig().getDouble("anim.fps.default", 20);
             if (plugin.getConfig().contains("anim.fps." + baseKey)) fps = plugin.getConfig().getDouble("anim.fps." + baseKey);
+            else if (baseKey.equals("inspect") && !plugin.getConfig().contains("anim.fps.default")) fps = 10;   // same default as the shipped config.yml for older config files
             if (currentGun != null && currentGun.animCfg() != null && currentGun.animCfg().contains(baseKey + ".fps")) fps = currentGun.animCfg().getDouble(baseKey + ".fps");
             fps = Math.max(1, Math.min(20.0 / frameTicks, fps));
             int n = 0;
