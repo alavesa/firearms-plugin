@@ -111,6 +111,7 @@ Hands with the player's skin work in grenade models exactly like in guns (see HA
 | Every gun purple/black | A model name with a capital letter or space; fixed automatically since 0.2, but check the report. Or the players still have an old pack: re-upload. |
 | Gun purple only while firing | Pack older than the server's animation index: re-upload the pack after every `/firearms pack`. |
 | Parts floating / torn | Read the `SELF-CHECK` and range warnings of `/firearms pack`; nothing is rounded any more (0.21). A Blockbench 5 file built with a plugin older than 0.21 lost every group pivot: rebuild. |
+| Every gun is a plain crossbow after adding one model | One bad items-file case drops the whole file. Since 0.22 a failed conversion is rolled back and every case is validated; the warning names the model and the cause - send that file. |
 | Three magazines / two stocks drawn at once | A gun pack with attachment variants: `hide-groups:` per gun in guns.yml (the report lists the group names). |
 | Pack is huge, build takes minutes | See *Pack size and frames* below: `anim.fps.inspect`, `skip-animations`, `hide-groups`, `anim.max-frames`. |
 | Animation barely visible | Too few frames or the motion sits on a sub-group instead of the top-level gun group. |

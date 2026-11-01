@@ -55,6 +55,7 @@ public final class FireController implements Listener {
     private final Map<UUID, Integer> drawUntil = new ConcurrentHashMap<>();
     private final Map<UUID, Integer> aimSeen = new ConcurrentHashMap<>();     // last server tick a right-click arrived (the client repeats it every ~4 ticks while held)
     private final Set<UUID> aiming = ConcurrentHashMap.newKeySet();          // players holding the sight
+    private final Map<UUID, Vector> lastPos = new ConcurrentHashMap<>();      // position a tick ago: the client's own motion, for additive knockback
     private final NamespacedKey aimKey;
 
     public FireController(FirearmsPlugin plugin, Registry registry, Ballistics ballistics, Casings casings) {
@@ -137,7 +138,26 @@ public final class FireController implements Listener {
         for (int i = 0; i < gun.pellets(); i++) ballistics.fire(p, gun, spread(p, gun), 1.0);
         if (registry.casingModel(gun) != null) casings.eject(p, gun, aim);
         recoil(p, gun);
+        knockback(p, gun, aim);
         playClip(p, gun, item, "fire");
+    }
+
+    /** Push the shooter back a little. The server does not know the client's current motion, so it is estimated
+     *  from the last tick's movement and the push is ADDED to it: a sprinting player keeps running, just a bit
+     *  slower for a tick, instead of being stopped dead the way a bare velocity packet would. Horizontal only. */
+    private void knockback(Player p, GunType gun, Vector aim) {
+        double k = gun.knockback() * (isAiming(p) ? plugin.getConfig().getDouble("knockback.aim-multiplier", 0.5) : 1.0);
+        if (k <= 0) return;
+        Vector back = new Vector(-aim.getX(), 0, -aim.getZ());
+        if (back.lengthSquared() < 1e-6) return;
+        back.normalize().multiply(k);
+        Vector was = lastPos.get(p.getUniqueId());
+        Vector now = p.getLocation().toVector();
+        Vector motion = was == null ? new Vector(0, 0, 0) : now.clone().subtract(was);
+        if (motion.lengthSquared() > 4) motion = new Vector(0, 0, 0);          // a teleport, not movement
+        double vy = p.isOnGround() ? 0 : Math.max(-3, Math.min(3, p.getVelocity().getY()));
+        Vector v = new Vector(motion.getX() + back.getX(), vy, motion.getZ() + back.getZ());
+        if (!NmsRecoil.sendMotion(p, v.getX(), v.getY(), v.getZ())) p.setVelocity(v);
     }
 
     private int capacity(ItemStack item, GunType gun) {
@@ -453,6 +473,7 @@ public final class FireController implements Listener {
     /** Every tick: release the sight when the right-click stream stopped; keep the client-side aim pose fresh. */
     public void tick() {
         int now = plugin.getServer().getCurrentTick();
+        for (Player pl : plugin.getServer().getOnlinePlayers()) if (registry.gunOf(pl.getInventory().getItemInMainHand()) != null) lastPos.put(pl.getUniqueId(), pl.getLocation().toVector()); else lastPos.remove(pl.getUniqueId());
         int timeout = plugin.getConfig().getInt("aim.hold-timeout-ticks", 7);
         for (UUID id : new ArrayList<>(aiming)) {
             Player p = plugin.getServer().getPlayer(id);

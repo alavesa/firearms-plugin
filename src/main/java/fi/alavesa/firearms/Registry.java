@@ -153,7 +153,8 @@ public final class Registry {
                 s.getString("reload-sound", ""), s.getString("equip-sound", ""), s.getString("empty-sound", ""),
                 s.getDouble("equip-seconds", 0),
                 s.getStringList("hide-groups"),
-                s.getStringList("skip-animations")));
+                s.getStringList("skip-animations"),
+                s.getDouble("knockback", plugin.getConfig().getDouble("knockback.default", 0.08))));
         }
         // Animation frame index written by the pack generator.
         File ai = new File(new File(plugin.getDataFolder(), "models"), "anim-index.yml");
@@ -440,11 +441,12 @@ public final class Registry {
         // Stat sheet on a 0-10 scale (10 = the configured maximum, config stats.max.*), so guns are comparable at a glance.
         ConfigurationSection mx = plugin.getConfig().getConfigurationSection("stats.max");
         double mDmg = mx == null ? 20 : mx.getDouble("damage", 20), mRate = mx == null ? 15 : mx.getDouble("fire-rate", 15), mRec = mx == null ? 8 : mx.getDouble("recoil", 8),
-               mSpread = mx == null ? 6 : mx.getDouble("spread", 6), mRange = mx == null ? 160 : mx.getDouble("range", 160);
+               mSpread = mx == null ? 6 : mx.getDouble("spread", 6), mRange = mx == null ? 160 : mx.getDouble("range", 160), mKb = mx == null ? 0.4 : mx.getDouble("knockback", 0.4);
         lore.add(stat("Damage", gun.damage() * gun.pellets() / mDmg, NamedTextColor.RED));
         lore.add(stat("Fire rate", gun.fireRate() / mRate, NamedTextColor.GOLD));
         lore.add(stat("Accuracy", 1 - Math.min(1, gun.accuracy() / mSpread), NamedTextColor.GREEN));
         lore.add(stat("Recoil", gun.recoil() / mRec, NamedTextColor.LIGHT_PURPLE));
+        lore.add(stat("Knockback", gun.knockback() / mKb, NamedTextColor.YELLOW));
         lore.add(stat("Range", gun.range() / mRange, NamedTextColor.AQUA));
         lore.add(Component.text("F = reload", NamedTextColor.DARK_GRAY).decoration(TextDecoration.ITALIC, false));
         meta.lore(lore);

@@ -122,10 +122,12 @@ public final class FirearmsCommand implements CommandExecutor, TabCompleter {
                 // Off the main thread: big models x many animation frames took long enough to freeze the server and
                 // time players out. The generator only reads immutable gun data + config, so this is safe.
                 plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
-                    PackGenerator.Result r = null; Exception err = null;
-                    try { r = new PackGenerator(plugin, plugin.registry, dry).generate(); } catch (Exception ex) { err = ex; }
+                    PackGenerator.Result r = null; Throwable err = null;
+                    // Throwable, not Exception: an OutOfMemoryError from a huge model used to kill this task silently and
+                    // leave packRunning set, so every later /firearms pack was refused as "already running".
+                    try { r = new PackGenerator(plugin, plugin.registry, dry).generate(); } catch (Throwable ex) { err = ex; plugin.getLogger().log(java.util.logging.Level.SEVERE, "Pack generation failed", ex); }
                     if (!dry && err == null) plugin.packHost.prepareAsync();   // hash + (upload mode) upload, still off the main thread
-                    final PackGenerator.Result res = r; final Exception e = err;
+                    final PackGenerator.Result res = r; final Throwable e = err;
                     plugin.getServer().getScheduler().runTask(plugin, () -> {
                         plugin.packRunning = false;
                         if (e != null) {

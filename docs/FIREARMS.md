@@ -90,6 +90,11 @@ Animation names map to clips by keywords (`anim.names` in config.yml, per gun `a
 | inspect | inspect, look, check | F with a full gun (variants) |
 | aim | aim, ads, scope, aiming, sight | its end pose is shown while aiming |
 
+Knockback (0.22): every shot pushes the shooter back a little against the aim, per gun `knockback` in guns.yml
+(blocks per tick per shot, default `knockback.default` 0.08, halved while aiming). It is added to the player's own
+motion, so a sprinting player keeps sprinting and only loses a touch of speed for a tick. The stat shows in the gun's
+lore next to recoil (scale `stats.max.knockback`); guns already in inventories get the new lore when re-given.
+
 Details, hands painted with the player's skin, sound keyframes and the reload/inspect variant rules are in
 [ANIMATIONS.md](ANIMATIONS.md) and [HANDS.md](HANDS.md).
 
@@ -118,6 +123,7 @@ the thing to send along with the model file.
 | a frame is purple while firing | the pack players hold is older than the server's animation index; run `/firearms pack` and let it re-send |
 | the server pauses after `/firearms pack` | RP Engine rebuilding its pack on the main thread; see RPENGINE.md (batched reload) |
 | a part floats or is twisted | run `/firearms pack`, read the self-check and range warnings, send the named part and the file |
+| adding one model turns every gun into a plain crossbow | one bad case drops the whole items file on the client; since 0.22 a model that fails to convert is rolled back to a placeholder and every case is validated before it is written - read the warning, which names the model and the cause, and send that .bbmodel |
 | a Blockbench 5 model is scrambled, its animations swing wildly | plugin older than 0.21 ignored the `groups` list of Blockbench 5 files (every pivot became 0,0,0); update and rebuild |
 | the pack is hundreds of MB or the build takes minutes | `anim.fps.inspect: 10` (default), per gun `skip-animations` / `hide-groups`, `anim.max-frames`; see ANIMATIONS.md *Pack size and frames* |
 | three magazines or two stocks show at once | an attachment pack: `hide-groups:` per gun in guns.yml |

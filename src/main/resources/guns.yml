@@ -32,6 +32,8 @@
 #  aim-accuracy   spread while sneaking
 #  recoil         vertical camera kick per shot in degrees
 #  h-recoil       horizontal kick, random left/right up to this many degrees
+#  knockback      push on the shooter per shot in blocks/tick against the aim (default config knockback.default 0.08;
+#                 0.3 is a shotgun shove); added to their motion, so sprinting goes on - shown as a lore stat
 #  falloff-min    damage multiplier at max range (damage falls linearly from hitscan-range to range)
 #  pellets        rounds per trigger pull (shotgun spread)
 #  sound / pitch  shot sound - a Minecraft id or firearms:<file> for any .ogg you drop into models/sounds/

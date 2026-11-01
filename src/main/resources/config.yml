@@ -160,6 +160,7 @@ stats:
     spread: 6        # hip-fire spread in degrees (accuracy bar = 10 at 0 deg, 0 at this value)
     recoil: 8        # vertical kick in degrees
     range: 160       # blocks
+    knockback: 0.4   # blocks per tick per shot
 
 # ---- GUI icons ----
 # In the inventory a gun shows a flat label card ("RIFLE", "SMG"...) instead of the 3D model - Roblox style. Draw your
@@ -213,6 +214,13 @@ weight:
 recoil:
   ticks: 3               # the kick is spread over this many ticks (packet-driven, no teleports)
   aim-multiplier: 0.5    # recoil while sneaking
+
+# ---- Knockback on the shooter ----
+# Each shot pushes the shooter back against the aim, ADDED to their own motion (a sprinting player keeps sprinting,
+# a touch slower for a tick) - never a stop. Per gun: guns.yml knockback (blocks per tick per shot); shown in the lore.
+knockback:
+  default: 0.08          # guns without their own value
+  aim-multiplier: 0.5    # while aiming
 
 # ---- Accuracy ----
 accuracy:

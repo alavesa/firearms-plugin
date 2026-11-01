@@ -287,6 +287,8 @@ public final class PackGenerator {
                 if (sc.isEmpty()) modelEntry = plainM;
                 else { sel.add("cases", sc); sel.add("fallback", plainM); modelEntry = sel; }
                 c.add("model", modelEntry);
+                String problem = caseProblem(c);
+                if (problem != null) { written.remove(e.getKey()); warnings.add("case '" + e.getKey() + "' left out of the items file: " + problem + " (one such case would make the client drop every gun)"); continue; }
                 report.add(base + ": \"" + e.getKey() + "\" -> composite of " + cp.get(0).size() + " part(s)" + (handsHere ? " + hands" : "") + (icon != null ? ", gui icon" : ""));
                 cases.add(c);
                 continue;
@@ -393,6 +395,8 @@ public final class PackGenerator {
                 c.add("model", m);
                 report.add(base + ": \"" + e.getKey() + "\" -> " + NS + ":item/" + e.getValue());
             }
+            String problem = caseProblem(c);
+            if (problem != null) { written.remove(e.getKey()); warnings.add("case '" + e.getKey() + "' left out of the items file: " + problem + " (one such case would make the client drop every gun)"); continue; }
             cases.add(c);
         }
         JsonObject select = new JsonObject();
@@ -516,16 +520,51 @@ public final class PackGenerator {
         if (kind.equals("gun")) for (GunType g : registry.guns()) if (g.model().equals(name)) { currentGun = g; break; }
         File bb = new File(dir, name + ".bbmodel");
         if (bb.exists()) {
+            // Everything a conversion adds is rolled back if it fails half-way: a model that threw after writing some
+            // of its frames used to leave those cases in the items file next to a placeholder, and one odd case there
+            // takes EVERY gun down with it (the client drops the whole items file).
+            Snapshot snap = new Snapshot();
             try {
                 convert(bb, name);
                 models++;
                 return;
-            } catch (Exception ex) {
-                warnings.add(name + ".bbmodel could not be converted (" + ex.getMessage() + ") - placeholder used");
+            } catch (Throwable ex) {
+                snap.rollback();
+                StackTraceElement at = ex.getStackTrace().length > 0 ? ex.getStackTrace()[0] : null;
+                warnings.add(name + ".bbmodel could not be converted - placeholder used. Cause: " + ex.getClass().getSimpleName() + (ex.getMessage() != null ? ": " + ex.getMessage() : "") + (at != null ? " (at " + at.getMethodName() + ":" + at.getLineNumber() + ")" : "") + " - please send this .bbmodel to the developer");
+                plugin.getLogger().log(java.util.logging.Level.WARNING, "[Firearms] " + name + ".bbmodel failed to convert", ex);
+                if (ex instanceof Error && !(ex instanceof StackOverflowError)) throw ex;
             }
         }
         placeholder(dir, name, kind);
         placeholders++;
+    }
+
+    /** The keys every per-model map holds right now; rollback() removes whatever was added since. */
+    private final class Snapshot {
+        private final List<Map<?, ?>> maps = List.of(files, cmdToModel, animIndex, frameStartIndex, clipNameIndex, clipSoundIndex, fpVariant, fpTints, iconOf, handVariant, handTints, skinOrder, compositeParts, bytesPerModel);
+        private final List<java.util.Set<Object>> keys = new ArrayList<>();
+        Snapshot() { for (Map<?, ?> m : maps) keys.add(new java.util.HashSet<>(m.keySet())); }
+        void rollback() { for (int i = 0; i < maps.size(); i++) { java.util.Set<Object> had = keys.get(i); maps.get(i).keySet().removeIf(k -> !had.contains(k)); } }
+    }
+
+    private static final java.util.regex.Pattern RESOURCE_ID = java.util.regex.Pattern.compile("[a-z0-9_.-]+:[a-z0-9_./-]+");
+
+    /** Why the client would reject this items-file case, or null: every model id must be a valid resource location
+     *  whose file exists in the pack (for our namespace), a composite must list models, a select case needs a when. */
+    private String caseProblem(JsonElement e) {
+        if (e == null) return null;
+        if (e.isJsonArray()) { for (JsonElement x : e.getAsJsonArray()) { String p = caseProblem(x); if (p != null) return p; } return null; }
+        if (!e.isJsonObject()) return null;
+        JsonObject o = e.getAsJsonObject();
+        if (o.has("model") && o.get("model").isJsonPrimitive()) {
+            String id = o.get("model").getAsString();
+            if (!RESOURCE_ID.matcher(id).matches()) return "model id '" + id + "' has characters the client rejects";
+            if (id.startsWith(NS + ":item/") && !files.containsKey("assets/" + NS + "/models/item/" + id.substring(NS.length() + 6) + ".json")) return "model '" + id + "' is not in the pack";
+        }
+        if (o.has("type") && "minecraft:composite".equals(str(o.get("type"), "")) && (!o.has("models") || !o.get("models").isJsonArray() || o.getAsJsonArray("models").isEmpty())) return "a composite without models";
+        for (var en : o.entrySet()) { String p = caseProblem(en.getValue()); if (p != null) return p; }
+        return null;
     }
 
     // ------------------------------------------------------------------ placeholders
