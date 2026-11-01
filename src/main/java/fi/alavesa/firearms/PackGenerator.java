@@ -57,6 +57,10 @@ public final class PackGenerator {
     private final Map<String, byte[]> files = new LinkedHashMap<>();       // zip path -> bytes
     private final Map<String, String> cmdToModel = new LinkedHashMap<>();  // custom_model_data -> model path
     private final Map<String, Map<String, int[]>> animIndex = new LinkedHashMap<>();
+    private final Map<String, Map<String, List<Integer>>> frameStartIndex = new LinkedHashMap<>();   // model -> clip -> tick each written frame starts at
+    private int heldFrames;                                                                             // sampled frames identical to the previous one (not written)
+    /** Clip keys the plugin can play; animations mapping to anything else are not baked (anim.bake-unknown: true bakes them anyway). */
+    private static final java.util.Set<String> KNOWN_CLIPS = java.util.Set.of("fire", "reload", "equip", "pump", "inspect", "aim", "unpin", "throw");
     private final Map<String, Map<String, String>> clipNameIndex = new LinkedHashMap<>();   // model -> clip key -> animation name
     private final Map<String, Map<String, List<String>>> clipSoundIndex = new LinkedHashMap<>();
     private int frames = 0, placeholders = 0, models = 0;
@@ -112,6 +116,7 @@ public final class PackGenerator {
         Set<String> casingModels = new LinkedHashSet<>();
         for (GunType g : registry.guns()) { String c = registry.casingModel(g); if (c != null) casingModels.add(c); }
         for (String c : casingModels) model(dir, c, "casing", done);
+        long tModels = System.currentTimeMillis() - t0;
         currentName = null;   // everything below is shared (items file, textures, sounds) - not one model's size
         files.put("assets/" + NS + "/textures/item/arm_pixel.png", whitePng());
         // Flat GUI icons (Roblox-style label cards) for every gun: models/<model>_icon.png if you drew one, else generated.
@@ -152,6 +157,8 @@ public final class PackGenerator {
         if (gunBase.equals(plainBase)) itemsFile(plainBase, cmdToModel, true);
         else { itemsFile(gunBase, gunMap, true); itemsFile(plainBase, restMap, false); }
         itemsFile(registry.vestBase().getKey().getKey(), vestCmdToModel, false);
+        long tItems = System.currentTimeMillis() - t0 - tModels;
+        notes.add("build time: models " + tModels + " ms, items files " + tItems + " ms");
         report.add(0, "Firearms pack report - " + new java.util.Date());
         report.add(1, "custom_model_data string  ->  model path");
         report.add("");
@@ -161,7 +168,7 @@ public final class PackGenerator {
         report.add("");
         report.add("warnings:");
         if (warnings.isEmpty()) report.add("  none"); else for (String w : warnings) report.add("  ! " + w);
-        if (reusedWrappersTotal > 0) report.add("frames: " + reusedWrappersTotal + " unmoved part(s) share their rest-pose file instead of a copy per frame (fewer files for RP Engine to zip)");
+        if (reusedWrappersTotal > 0 || heldFrames > 0) report.add("frames: " + reusedWrappersTotal + " part pose(s) shared between frames (one file per distinct pose), " + heldFrames + " sampled frame(s) identical to the previous one held instead of written");
         put("pack-report.txt", String.join("\n", report));
         if (!dryRun) try { Files.writeString(new File(plugin.getDataFolder(), "pack-report.txt").toPath(), String.join("\n", report)); } catch (IOException ignored) { }
 
@@ -179,7 +186,10 @@ public final class PackGenerator {
         YamlConfiguration idx = new YamlConfiguration();
         for (var m : animIndex.entrySet()) for (var c : m.getValue().entrySet()) {
             idx.set(m.getKey() + "." + c.getKey() + ".frames", c.getValue()[0]);
-            idx.set(m.getKey() + "." + c.getKey() + ".frame-ticks", c.getValue()[1]);
+            idx.set(m.getKey() + "." + c.getKey() + ".ticks", c.getValue()[1]);                                   // clip length in ticks
+            idx.set(m.getKey() + "." + c.getKey() + ".frame-ticks", Math.max(1, (int) Math.round((double) c.getValue()[1] / Math.max(1, c.getValue()[0]))));
+            List<Integer> at = frameStartIndex.getOrDefault(m.getKey(), Map.of()).get(c.getKey());
+            if (at != null && !at.isEmpty()) idx.set(m.getKey() + "." + c.getKey() + ".frame-at", at);   // tick each frame starts at (held frames were not written)
             String cn = clipNameIndex.getOrDefault(m.getKey(), Map.of()).get(c.getKey());
             if (cn != null) idx.set(m.getKey() + "." + c.getKey() + ".name", cn);
             Map<String, List<String>> sm = clipSoundIndex.get(m.getKey());
@@ -199,7 +209,7 @@ public final class PackGenerator {
             // and write the animation index ONLY after the zip is complete: an index that is newer than the pack
             // the players have would make clips reference frames that are not in their pack (purple gun while firing).
             File tmp = new File(plugin.getDataFolder(), "Firearms-pack.zip.tmp");
-            try (ZipOutputStream out = new ZipOutputStream(new FileOutputStream(tmp))) {
+            try (ZipOutputStream out = new ZipOutputStream(new java.io.BufferedOutputStream(new FileOutputStream(tmp), 1 << 20))) {
                 for (var e : files.entrySet()) {
                     out.putNextEntry(new ZipEntry(e.getKey()));
                     out.write(e.getValue());
@@ -208,6 +218,7 @@ public final class PackGenerator {
             }
             Files.move(tmp.toPath(), zip.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             idx.save(new File(dir, "anim-index.yml"));
+            notes.add("zip: " + files.size() + " files written in " + (System.currentTimeMillis() - t0 - tModels - tItems) + " ms");
         }
         return new Result(models, frames, placeholders, warnings, zip, bytes, biggest, System.currentTimeMillis() - t0, notes);
     }
@@ -860,6 +871,7 @@ public final class PackGenerator {
     private static final class Bone {
         String uuid, name; double[] origin = {0, 0, 0}; double[] rotation = {0, 0, 0};
         Bone parent; List<Bone> children = new ArrayList<>(); List<String> elements = new ArrayList<>();
+        boolean hidden;   // group hidden in Blockbench (eye icon)
     }
 
     private static final class Cube {
@@ -870,7 +882,83 @@ public final class PackGenerator {
     }
 
     private static final class Clip {
-        String name; double length; Map<String, List<JsonObject>> rot = new HashMap<>(), pos = new HashMap<>(); // bone uuid -> keyframes
+        String name; double length;
+        final Map<String, List<Track.Key>> rotKeys = new HashMap<>(), posKeys = new HashMap<>(), scaleKeys = new HashMap<>();   // bone uuid -> keyframes (while parsing)
+        final Map<String, Track> rot = new HashMap<>(), pos = new HashMap<>(), scale = new HashMap<>();                          // bone uuid -> sampled track
+        void seal() {
+            for (var e : rotKeys.entrySet()) rot.put(e.getKey(), new Track(e.getValue(), 0));
+            for (var e : posKeys.entrySet()) pos.put(e.getKey(), new Track(e.getValue(), 0));
+            for (var e : scaleKeys.entrySet()) scale.put(e.getKey(), new Track(e.getValue(), 1));
+        }
+        boolean animates(String uuid) { return rot.containsKey(uuid) || pos.containsKey(uuid) || scale.containsKey(uuid); }
+        /** Every keyframe time of the clip (sorted, deduplicated): the moments the motion changes course. */
+        java.util.TreeSet<Double> keyTimes() {
+            java.util.TreeSet<Double> t = new java.util.TreeSet<>();
+            for (Track tr : rot.values()) for (double x : tr.times()) t.add(x);
+            for (Track tr : pos.values()) for (double x : tr.times()) t.add(x);
+            for (Track tr : scale.values()) for (double x : tr.times()) t.add(x);
+            return t;
+        }
+    }
+
+    /** One Blockbench animation -> Clip: bone keyframes as tracks (rotation, position, scale) and its sound
+     *  keyframes (Blockbench "Effects" animator) copied into the pack from models/sounds/<name>.ogg. */
+    private Clip parseClip(File bb, String name, JsonObject a, List<String> clipSounds) throws IOException {
+        Clip clip = new Clip();
+        clip.name = str(a.get("name"), "anim");
+        clip.length = num(a.get("length"), 0);
+        if (a.has("animators")) for (var en : a.getAsJsonObject("animators").entrySet()) {
+            JsonObject an = en.getValue().getAsJsonObject();
+            if (!an.has("keyframes")) continue;
+            for (JsonElement ke : an.getAsJsonArray("keyframes")) {
+                JsonObject k = ke.getAsJsonObject();
+                String ch = str(k.get("channel"), "");
+                if (ch.equals("rotation")) clip.rotKeys.computeIfAbsent(en.getKey(), x -> new ArrayList<>()).add(trackKey(k));
+                else if (ch.equals("position")) clip.posKeys.computeIfAbsent(en.getKey(), x -> new ArrayList<>()).add(trackKey(k));
+                else if (ch.equals("scale")) clip.scaleKeys.computeIfAbsent(en.getKey(), x -> new ArrayList<>()).add(trackKey(k));
+                else if (ch.equals("sound") && clipSounds != null) {
+                    // {effect: "name", file: "C:/.../name.ogg"}: the audio is NOT inside the .bbmodel, so it is looked
+                    // up in models/sounds/<name>.ogg (or the keyframe's own path).
+                    JsonArray dp = k.has("data_points") ? k.getAsJsonArray("data_points") : new JsonArray();
+                    for (JsonElement de : dp) {
+                        JsonObject d = de.getAsJsonObject();
+                        String file = str(d.get("file"), "");
+                        String ev = str(d.get("effect"), "");
+                        if (ev.isEmpty() && !file.isEmpty()) ev = new File(file).getName().replaceAll("\\.ogg$", "");
+                        if (ev.isEmpty()) continue;
+                        String sname = ev.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_]", "_");
+                        File ogg = new File(new File(bb.getParentFile(), "sounds"), sname + ".ogg");
+                        if (!ogg.exists()) ogg = new File(bb.getParentFile(), sname + ".ogg");
+                        if (!ogg.exists() && !file.isEmpty() && new File(file).exists()) ogg = new File(file);
+                        if (!ogg.exists()) { if (clampNoted.add(name + "|snd|" + sname)) warnings.add(name + ": sound '" + ev + "' (animation '" + clip.name + "') - put " + sname + ".ogg into models/sounds/"); continue; }
+                        files.put("assets/" + NS + "/sounds/" + sname + ".ogg", Files.readAllBytes(ogg.toPath()));
+                        soundEvents.computeIfAbsent(sname, x -> new ArrayList<>());
+                        if (!soundEvents.get(sname).contains(sname)) soundEvents.get(sname).add(sname);
+                        long tick = Math.round(num(k.get("time"), 0) * 20);
+                        clipSounds.add(tick + ":" + NS + ":" + sname);
+                    }
+                }
+            }
+        }
+        clip.seal();
+        return clip;
+    }
+
+    /** A Blockbench keyframe -> Track key: first data point (x,y,z as numbers or numeric strings), its interpolation and bezier handles. */
+    private static Track.Key trackKey(JsonObject k) {
+        double[] v = new double[3];
+        if (k.has("data_points") && k.get("data_points").isJsonArray() && !k.getAsJsonArray("data_points").isEmpty()) {
+            JsonObject p = k.getAsJsonArray("data_points").get(0).getAsJsonObject();
+            v[0] = num(p.get("x"), 0); v[1] = num(p.get("y"), 0); v[2] = num(p.get("z"), 0);
+        }
+        Track.Key key = new Track.Key(num(k.get("time"), 0), v, Track.mode(str(k.get("interpolation"), "linear")));
+        if (key.mode == Track.Mode.BEZIER) {
+            if (k.has("bezier_left_time")) key.leftTime = vec(k.get("bezier_left_time"));
+            if (k.has("bezier_left_value")) key.leftValue = vec(k.get("bezier_left_value"));
+            if (k.has("bezier_right_time")) key.rightTime = vec(k.get("bezier_right_time"));
+            if (k.has("bezier_right_value")) key.rightValue = vec(k.get("bezier_right_value"));
+        }
+        return key;
     }
 
     private void convert(File bb, String name) throws IOException {
@@ -956,7 +1044,8 @@ public final class PackGenerator {
         // --- bones
         List<Bone> top = new ArrayList<>();
         Map<String, Bone> bones = new HashMap<>();
-        if (root.has("outliner")) for (JsonElement oe : root.getAsJsonArray("outliner")) parseOutliner(oe, null, top, bones, cubes);
+        Map<String, JsonObject> groupTable = groupTable(root);
+        if (root.has("outliner")) for (JsonElement oe : root.getAsJsonArray("outliner")) parseOutliner(oe, null, top, bones, cubes, groupTable);
         int flashCubes = 0;
         for (Cube c : cubes.values()) {
             boolean fl = isFlashName(c.name);
@@ -1040,14 +1129,40 @@ public final class PackGenerator {
 
         // --- rest model
         boolean composite = !plugin.getConfig().getString("anim.mode", "composite").equalsIgnoreCase("baked");
-        CompositeModel comp = composite ? new CompositeModel(name, mpath, cubes, cubesC, cubesS, bones, textures, display, texIndex, texRes, S, flashAt, handsOn, slimOn) : null;
+        List<String> hideGroups = currentGun != null && currentGun.hideGroups() != null ? currentGun.hideGroups() : List.of();
         boolean arms = currentGun != null && registry.armsEnabled(currentGun) && !handsOn && !composite;
+
+        // --- animations: parse every picked clip first. The BASE pose (an animation named static_idle / idle) is
+        // layered under the rest model and under every frame - gun packs made for other systems hide spare
+        // magazines, show the hands etc. with it, and without it every variant would be drawn at once.
+        List<Map.Entry<String, Clip>> picked = new ArrayList<>();
+        Map<String, List<String>> soundsOf = new HashMap<>();
+        Clip base = null;
+        boolean bakeUnknown = plugin.getConfig().getBoolean("anim.bake-unknown", false);
+        List<String> unknown = new ArrayList<>();
+        if (root.has("animations")) for (var pe : pickAnimations(name, root.getAsJsonArray("animations"))) {
+            String key = pe.getKey();
+            List<String> clipSounds = new ArrayList<>();
+            Clip clip = parseClip(bb, name, pe.getValue().getAsJsonObject(), clipSounds);
+            if (key.equals("base")) { base = clip; report.add(name + ": base pose '" + clip.name + "' layered under the rest model and every frame"); continue; }
+            if (key.equals("aim_in") || key.equals("aim_out")) { report.add(name + ": animation '" + clip.name + "' not baked - aiming is one pose model shown client-side, not frames (only the 'aim' clip's end pose is used)"); continue; }
+            if (!KNOWN_CLIPS.contains(key.replaceAll("_\\d+$", "")) && !bakeUnknown) { unknown.add(clip.name); continue; }
+            picked.add(Map.entry(key, clip));
+            soundsOf.put(key, clipSounds);
+        }
+        if (!unknown.isEmpty()) report.add(name + ": not baked (no clip plays them): " + unknown + " - name them after a clip (anim.names) or set anim.bake-unknown: true");
+        List<Clip> clipList = new ArrayList<>();
+        for (var pe : picked) clipList.add(pe.getValue());
+        CompositeModel comp = composite ? new CompositeModel(name, mpath, cubes, cubesC, cubesS, bones, textures, display, texIndex, texRes, S, flashAt, handsOn, slimOn, hideGroups, base, clipList) : null;
+
+        // --- rest model
         if (composite) {
-            comp.emit(name, mpath, null, 0, false);
-            cmdToModel.put(name, mpath + "__b0");   // a real model path is still needed for the report / validation
-            report.add(name + ": composite mode - " + comp.partCount() + " part(s), bone rotations exact (no 22.5 steps)" + (hiddenSkipped > 0 ? "; " + hiddenSkipped + " cube(s) hidden in Blockbench left out (pack.include-hidden-cubes: true keeps them)" : ""));
+            String primary = comp.emitPose(name, mpath, null, 0, false);
+            cmdToModel.put(name, primary);   // a real model path is still needed for the report / validation
+            report.add(name + ": composite mode - " + comp.partCount() + " part(s) for " + comp.animated.size() + " animated bone(s): " + comp.boneParts + " bone part(s), " + comp.displayParts + " display-rotated part(s) (cubes whose rotation is not one Java axis at a 22.5 step carry it in their display transform); " + comp.folded + " cube(s) of static groups folded into the animated bone above them" + (hiddenSkipped > 0 ? "; " + hiddenSkipped + " cube(s) hidden in Blockbench left out (pack.include-hidden-cubes: true keeps them)" : "") + (comp.hiddenByGroup > 0 ? "; " + comp.hiddenByGroup + " cube(s) left out by hide-groups" : "") + (comp.alwaysHidden > 0 ? "; " + comp.alwaysHidden + " cube(s) scaled to nothing by the base pose left out" : ""));
             if (hiddenSkipped > 0) warnings.add(name + ": " + hiddenSkipped + " cube(s) are hidden in Blockbench (eye icon) and were left out - unhide them, or set pack.include-hidden-cubes: true");
             hiddenSkipped = 0;
+            if (!comp.groupNames.isEmpty()) report.add(name + ": groups with cubes: " + comp.groupNames + "  (guns.yml  hide-groups: [name, ...]  leaves any of them out)");
         } else {
             JsonObject rest = bake(name, cubesPlain, bones, null, textures, texIndex, texRes, display, null, 0, S, null);
             put("assets/" + NS + "/models/item/" + mpath + ".json", GSON.toJson(rest));
@@ -1056,88 +1171,69 @@ public final class PackGenerator {
             if (handsOn) handVariants(name, mpath, cubesC, cubesS, slimOn, bones, null, textures, texIndex, texRes, display, null, 0, S, null);
         }
 
-        // --- animations -> frames
+        // --- frames. The server can change the held model once per tick, so a clip is sampled at 20 frames per
+        // second at most (one per tick, plus the end pose); frames whose pose did not change from the previous one
+        // are NOT written - the previous frame simply holds (frame-at in anim-index.yml says when each one starts).
         int frameTicks = Math.max(1, plugin.getConfig().getInt("anim.frame-ticks", 1));
         Map<String, int[]> clips = new LinkedHashMap<>();
-        if (root.has("animations")) for (var picked : pickAnimations(name, root.getAsJsonArray("animations"))) {
-            JsonElement ae = picked.getValue();
-            JsonObject a = ae.getAsJsonObject();
-            Clip clip = new Clip();
-            clip.name = str(a.get("name"), "anim");
-            clip.length = num(a.get("length"), 0);
-            String key = picked.getKey();
+        Map<String, List<Integer>> starts = new LinkedHashMap<>();
+        for (var pe : picked) {
+            String key = pe.getKey();
+            Clip clip = pe.getValue();
             if (clips.containsKey(key)) { warnings.add(name + ": animation '" + clip.name + "' ignored - '" + key + "' already has one"); continue; }
-            if (key.equals("aim_in") || key.equals("aim_out")) { report.add(name + ": animation '" + clip.name + "' not baked - aiming is one pose model shown client-side, not frames (only the 'aim' clip's end pose is used)"); continue; }
             clipNameIndex.computeIfAbsent(name, x -> new LinkedHashMap<>()).put(key, clip.name);
-            List<String> clipSounds = new ArrayList<>();
-            if (a.has("animators")) for (var en : a.getAsJsonObject("animators").entrySet()) {
-                JsonObject an = en.getValue().getAsJsonObject();
-                if (!an.has("keyframes")) continue;
-                for (JsonElement ke : an.getAsJsonArray("keyframes")) {
-                    JsonObject k = ke.getAsJsonObject();
-                    String ch = str(k.get("channel"), "");
-                    if (ch.equals("rotation")) clip.rot.computeIfAbsent(en.getKey(), x -> new ArrayList<>()).add(k);
-                    else if (ch.equals("position")) clip.pos.computeIfAbsent(en.getKey(), x -> new ArrayList<>()).add(k);
-                    else if (ch.equals("sound")) {
-                        // Blockbench "Effects" animator: {effect: "name", file: "C:/.../name.ogg"}. The audio is NOT
-                        // inside the .bbmodel, so it is looked up in models/sounds/<name>.ogg (or the keyframe's path).
-                        JsonArray dp = k.has("data_points") ? k.getAsJsonArray("data_points") : new JsonArray();
-                        for (JsonElement de : dp) {
-                            JsonObject d = de.getAsJsonObject();
-                            String file = str(d.get("file"), "");
-                            String ev = str(d.get("effect"), "");
-                            if (ev.isEmpty() && !file.isEmpty()) ev = new File(file).getName().replaceAll("\\.ogg$", "");
-                            if (ev.isEmpty()) continue;
-                            String sname = ev.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_]", "_");
-                            File ogg = new File(new File(bb.getParentFile(), "sounds"), sname + ".ogg");
-                            if (!ogg.exists()) ogg = new File(bb.getParentFile(), sname + ".ogg");
-                            if (!ogg.exists() && !file.isEmpty() && new File(file).exists()) ogg = new File(file);
-                            if (!ogg.exists()) { warnings.add(name + ": sound '" + ev + "' in animation '" + clip.name + "' - put " + sname + ".ogg into models/sounds/"); continue; }
-                            files.put("assets/" + NS + "/sounds/" + sname + ".ogg", Files.readAllBytes(ogg.toPath()));
-                            soundEvents.computeIfAbsent(sname, x -> new ArrayList<>());
-                            if (!soundEvents.get(sname).contains(sname)) soundEvents.get(sname).add(sname);
-                            long tick = Math.round(num(k.get("time"), 0) * 20);
-                            clipSounds.add(tick + ":" + NS + ":" + sname);
-                        }
-                    }
-                }
-            }
-            // Frame count is PER ANIMATION: guns.yml anim.<clip>.frames, else the animation's own Blockbench
-            // snapping (keyframes per second), else length x 20 / frame-ticks; capped by anim.max-frames (per gun or config).
-            int maxFrames = Math.max(2, plugin.getConfig().getInt("anim.max-frames", 120));
+            int maxFrames = Math.max(2, plugin.getConfig().getInt("anim.max-frames", 200));
             if (currentGun != null && currentGun.animCfg() != null && currentGun.animCfg().contains("max-frames")) maxFrames = Math.max(2, currentGun.animCfg().getInt("max-frames"));
+            int ticksTotal = Math.max(1, (int) Math.round(clip.length * 20.0));
+            // frames per second: guns.yml anim.<clip>.fps, else config anim.fps.<clip> / anim.fps.default (20 = one per tick)
+            String baseKey = key.replaceAll("_\\d+$", "");
+            double fps = plugin.getConfig().getDouble("anim.fps.default", 20);
+            if (plugin.getConfig().contains("anim.fps." + baseKey)) fps = plugin.getConfig().getDouble("anim.fps." + baseKey);
+            if (currentGun != null && currentGun.animCfg() != null && currentGun.animCfg().contains(baseKey + ".fps")) fps = currentGun.animCfg().getDouble(baseKey + ".fps");
+            fps = Math.max(1, Math.min(20.0 / frameTicks, fps));
             int n = 0;
             if (currentGun != null && currentGun.animCfg() != null && currentGun.animCfg().contains(key + ".frames")) n = currentGun.animCfg().getInt(key + ".frames");
-            if (n <= 0 && a.has("snapping")) { double snap = num(a.get("snapping"), 0); if (snap > 0) n = (int) Math.ceil(clip.length * snap); }
-            if (n <= 0) n = (int) Math.ceil(clip.length * 20.0 / frameTicks);
+            if (n <= 0) n = (int) Math.ceil(clip.length * fps) + 1;
             if (n > maxFrames) warnings.add(name + " clip '" + key + "': " + n + " frames capped at " + maxFrames + " (the clip is sampled coarser; raise anim.max-frames or the gun's anim.max-frames)");
             if (key.equals("aim")) n = 1;   // the aiming pose: ONE model (the clip's end), shown by a client-side slot packet while aiming
             n = Math.max(1, Math.min(maxFrames, n));
-            int clipTicks = Math.max(1, (int) Math.round(clip.length * 20.0 / n));
-            for (int i = 1; i <= n; i++) {
-                double t = n == 1 ? clip.length : (i - 1) * (clip.length / (n - 1));
-                boolean flashFrame = key.equals("fire") && i <= Math.max(0, plugin.getConfig().getInt("flash.frames", 1));
-                String fname = name + "_" + key + "_" + i;
+            List<Integer> at = new ArrayList<>();
+            String lastSig = null;
+            int emitted = 0;
+            for (int i = 0; i < n; i++) {
+                double t = n == 1 ? clip.length : clip.length * i / (n - 1);
+                int tick = n == 1 ? 0 : (int) Math.round(t * 20.0);
+                boolean flashFrame = key.equals("fire") && i < Math.max(0, plugin.getConfig().getInt("flash.frames", 1));
                 if (composite) {
-                    comp.emit(fname, mpath + "_" + key + "_" + i, clip, t, flashFrame);
-                    cmdToModel.put(fname, comp.lastPrimary != null ? comp.lastPrimary : mpath + "_" + key + "_" + i + "__b0");
+                    String sig = comp.pose(clip, t, flashFrame);
+                    if (sig.equals(lastSig)) { heldFrames++; continue; }          // nothing moved since the previous frame: it holds
+                    lastSig = sig;
+                    emitted++;
+                    String fname = name + "_" + key + "_" + emitted;
+                    cmdToModel.put(fname, comp.register(fname));
                 } else {
+                    emitted++;
+                    String fname = name + "_" + key + "_" + emitted;
                     Bone rb = pickRoot(topBones, clip);
                     JsonObject frame = bake(name, cubesPlain, bones, rb, textures, texIndex, texRes, display, clip, t, S, flashFrame ? flashAt : null);
-                    put("assets/" + NS + "/models/item/" + mpath + "_" + key + "_" + i + ".json", GSON.toJson(frame));
-                    cmdToModel.put(fname, mpath + "_" + key + "_" + i);
-                    if (arms) armsVariant(fname, mpath + "_" + key + "_" + i, frame);
-                    if (handsOn) handVariants(fname, mpath + "_" + key + "_" + i, cubesC, cubesS, slimOn, bones, rb, textures, texIndex, texRes, display, clip, t, S, flashFrame ? flashAt : null);
+                    put("assets/" + NS + "/models/item/" + mpath + "_" + key + "_" + emitted + ".json", GSON.toJson(frame));
+                    cmdToModel.put(fname, mpath + "_" + key + "_" + emitted);
+                    if (arms) armsVariant(fname, mpath + "_" + key + "_" + emitted, frame);
+                    if (handsOn) handVariants(fname, mpath + "_" + key + "_" + emitted, cubesC, cubesS, slimOn, bones, rb, textures, texIndex, texRes, display, clip, t, S, flashFrame ? flashAt : null);
                 }
+                at.add(tick);
                 frames++;
             }
-            clips.put(key, new int[]{n, clipTicks});
+            clips.put(key, new int[]{emitted, ticksTotal});
+            starts.put(key, at);
+            List<String> clipSounds = soundsOf.getOrDefault(key, List.of());
             if (!clipSounds.isEmpty()) clipSoundIndex.computeIfAbsent(name, x -> new LinkedHashMap<>()).put(key, clipSounds);
         }
         if (!clips.isEmpty()) {
             animIndex.put(name, clips);
+            frameStartIndex.put(name, starts);
             StringBuilder sb = new StringBuilder(name + " clips:");
-            for (var ce : clips.entrySet()) sb.append(' ').append(ce.getKey()).append('(').append(ce.getValue()[0]).append('x').append(ce.getValue()[1]).append(')');
+            for (var ce : clips.entrySet()) sb.append(' ').append(ce.getKey()).append('(').append(ce.getValue()[0]).append(" frames/").append(ce.getValue()[1]).append(" ticks)");
             notes.add(sb.toString());
         } else notes.add(name + " clips: none (no animations in the .bbmodel)");
     }
@@ -1152,11 +1248,18 @@ public final class PackGenerator {
         variantClips.add("reload"); variantClips.add("inspect");   // always: the magazine / health rules depend on them
         Map<String, List<JsonElement>> byKey = new LinkedHashMap<>();
         Map<JsonElement, Integer> scores = new HashMap<>();
+        List<java.util.regex.Pattern> skip = new ArrayList<>();
+        if (currentGun != null && currentGun.skipAnimations() != null) for (String h : currentGun.skipAnimations()) if (h != null && !h.isBlank()) skip.add(glob(h));
+        List<String> skipped = new ArrayList<>();
         for (JsonElement ae : anims) {
             String n = str(ae.getAsJsonObject().get("name"), "anim");
+            boolean sk = false;
+            for (var pat : skip) if (pat.matcher(n.toLowerCase(Locale.ROOT)).matches()) sk = true;
+            if (sk) { skipped.add(n); continue; }
             byKey.computeIfAbsent(clipKey(n), x -> new ArrayList<>()).add(ae);
             scores.put(ae, clipScore(n));
         }
+        if (!skipped.isEmpty()) report.add(model + ": skipped by skip-animations: " + skipped);
         List<Map.Entry<String, JsonElement>> out = new ArrayList<>();
         for (var e : byKey.entrySet()) {
             List<JsonElement> list = new ArrayList<>(e.getValue());
@@ -1166,7 +1269,11 @@ public final class PackGenerator {
                 if (list.size() > 1) report.add(model + ": " + list.size() + " '" + e.getKey() + "' variants play at random");
             } else {
                 out.add(Map.entry(e.getKey(), list.get(0)));
-                for (int i = 1; i < list.size(); i++) warnings.add(model + ": animation ignored: " + str(list.get(i).getAsJsonObject().get("name"), "?") + " (" + e.getKey() + " is '" + str(list.get(0).getAsJsonObject().get("name"), "?") + "'; list the clip under anim.random-variants to play all of them)");
+                for (int i = 1; i < list.size(); i++) {
+                    String loser = str(list.get(i).getAsJsonObject().get("name"), "?"), winner = str(list.get(0).getAsJsonObject().get("name"), "?");
+                    if (e.getKey().equals("base")) report.add(model + ": base pose is '" + winner + "'; '" + loser + "' not used (static fire-mode / attachment poses of other systems)");
+                    else warnings.add(model + ": animation ignored: " + loser + " (" + e.getKey() + " is '" + winner + "'; list the clip under anim.random-variants to play all of them)");
+                }
             }
         }
         return out;
@@ -1326,7 +1433,7 @@ public final class PackGenerator {
     private static boolean isFlashName(String n) {
         if (n == null) return false;
         String l = n.toLowerCase(Locale.ROOT).replace("_", "").replace(" ", "");
-        return l.contains("flash") || l.contains("muzzle");
+        return l.contains("flash");   // "muzzle" alone is the muzzle brake / muzzle position bone of many gun packs, not the flash
     }
 
     private static final Map<String, List<String>> DEFAULT_NAMES = new LinkedHashMap<>();
@@ -1341,6 +1448,7 @@ public final class PackGenerator {
         DEFAULT_NAMES.put("aim_in", List.of("aim_in", "ads_in", "scope_in", "aim in", "aimin"));
         DEFAULT_NAMES.put("aim_out", List.of("aim_out", "ads_out", "scope_out", "aim out", "aimout"));
         DEFAULT_NAMES.put("aim", List.of("aim", "ads", "scope", "aiming", "sight"));
+        DEFAULT_NAMES.put("base", List.of("static_idle", "idle", "static"));   // layered under everything, never baked as a clip
     }
 
     /** Which clip an animation name belongs to. Keywords come from guns.yml `anim-names:` (per gun), then config
@@ -1385,7 +1493,11 @@ public final class PackGenerator {
         return out;
     }
 
-    private static void parseOutliner(JsonElement oe, Bone parent, List<Bone> top, Map<String, Bone> bones, Map<String, Cube> cubes) {
+    /** Blockbench 4.x keeps a group's name, pivot and rotation inside the outliner entry; Blockbench 5 (format 5.x)
+     *  moved them into a separate top-level "groups" list and the outliner entry only holds {uuid, children}.
+     *  Reading only the outliner gave every Blockbench 5 group pivot 0,0,0 and no rotation - rotated groups ended up
+     *  in the wrong place and animations swung about the wrong pivots ("broken model / broken animations"). */
+    private static void parseOutliner(JsonElement oe, Bone parent, List<Bone> top, Map<String, Bone> bones, Map<String, Cube> cubes, Map<String, JsonObject> groups) {
         if (oe.isJsonPrimitive()) {
             Cube c = cubes.get(oe.getAsString());
             if (c != null && parent != null) { c.bone = parent; parent.elements.add(c.uuid); }
@@ -1394,13 +1506,27 @@ public final class PackGenerator {
         JsonObject o = oe.getAsJsonObject();
         Bone b = new Bone();
         b.uuid = str(o.get("uuid"), "b" + bones.size());
-        b.name = str(o.get("name"), b.uuid);
-        if (o.has("origin")) b.origin = vec(o.get("origin"));
-        if (o.has("rotation")) b.rotation = vec(o.get("rotation"));
+        JsonObject g = groups.get(b.uuid);
+        JsonObject src = o.has("name") || g == null ? o : g;
+        b.name = str(src.get("name"), b.uuid);
+        if (src.has("origin")) b.origin = vec(src.get("origin"));
+        if (src.has("rotation")) b.rotation = vec(src.get("rotation"));
+        b.hidden = src.has("visibility") && src.get("visibility").isJsonPrimitive() && !src.get("visibility").getAsBoolean();
         b.parent = parent;
         bones.put(b.uuid, b);
         if (parent == null) top.add(b); else parent.children.add(b);
-        if (o.has("children")) for (JsonElement ce : o.getAsJsonArray("children")) parseOutliner(ce, b, top, bones, cubes);
+        if (o.has("children")) for (JsonElement ce : o.getAsJsonArray("children")) parseOutliner(ce, b, top, bones, cubes, groups);
+    }
+
+    /** uuid -> group object of a Blockbench 5 file ("groups" list), empty for Blockbench 4.x files. */
+    private static Map<String, JsonObject> groupTable(JsonObject root) {
+        Map<String, JsonObject> out = new HashMap<>();
+        if (root.has("groups") && root.get("groups").isJsonArray()) for (JsonElement ge : root.getAsJsonArray("groups")) {
+            if (!ge.isJsonObject()) continue;
+            JsonObject g = ge.getAsJsonObject();
+            if (g.has("uuid")) out.put(str(g.get("uuid"), ""), g);
+        }
+        return out;
     }
 
     private static double[] fit(double[] v, double s, double[] sh) {
@@ -1521,7 +1647,7 @@ public final class PackGenerator {
         for (Bone b : bones.values()) {
             double[] r = b.rotation.clone(), p = {0, 0, 0};
             if (clip != null) {
-                double[] ar = sample(clip.rot.get(b.uuid), t), ap = sample(clip.pos.get(b.uuid), t);
+                double[] ar = sampleTrack(clip.rot.get(b.uuid), t, 0), ap = sampleTrack(clip.pos.get(b.uuid), t, 0);
                 for (int i = 0; i < 3; i++) { ar[i] *= animRotSign[i]; ap[i] *= animPosSign[i]; }
                 if (b == rootBone) { rootRot = ar; rootPos = new double[]{ap[0] * scale, ap[1] * scale, ap[2] * scale}; }
                 else for (int i = 0; i < 3; i++) { r[i] += ar[i]; p[i] += ap[i] * scale; }
@@ -1687,7 +1813,12 @@ public final class PackGenerator {
     // rotation/translation for that frame (display rotations are free floats - no 22.5 degree steps), composed
     // with the gun's own display settings. The items file shows the frame as a minecraft:composite of the parts.
     // =====================================================================================================
-    private static final String[] CTX = {"firstperson_righthand", "firstperson_lefthand", "thirdperson_righthand", "thirdperson_lefthand", "gui", "ground", "fixed", "head"};
+    // The client's ItemTransforms deserializer (26.3, verified in the client jar) uses the right-hand transform for a
+    // missing left-hand context (and mirrors it for left-handed players itself), so the left-hand keys are never
+    // written: half the bytes of every frame wrapper.
+    private static final String[] CTX = {"firstperson_righthand", "thirdperson_righthand", "gui", "ground", "fixed", "head"};
+    private static final String[] CTX_FP = {"firstperson_righthand"};
+    private static final String[] CTX_FP_TP = {"firstperson_righthand", "thirdperson_righthand"};
 
     private final class CompositeModel {
         final String name, mpath;
@@ -1697,38 +1828,98 @@ public final class PackGenerator {
         final double scale; final double[] flashAt; final boolean hands, slim;
         final Bone root = new Bone();                        // virtual bone for cubes outside any group
         final List<Part> parts = new ArrayList<>();
+        final Clip base;                                     // the base pose (static_idle), layered under everything
+        int boneParts, displayParts, hiddenByGroup, alwaysHidden, folded;
+        final List<String> groupNames = new ArrayList<>();
+        final java.util.Set<String> animated = new java.util.HashSet<>();   // bones some clip moves: the only ones that need a part of their own
 
+        /** A part = one sub-model following one ANIMATED bone (its owner). Every cube under static groups below that
+         *  bone is folded into it. A bone part holds the cubes whose total rotation a Java element can carry as it is
+         *  (none, or one axis at a 22.5 step); a display part holds the cubes that share one other rotation, carried by
+         *  the part's display transform - no axis permutation, no face remapping, no rounding. */
         final class Part {
             Bone bone; String suffix; int variant;           // 0 plain, 1 classic hand, 2 slim hand, 3 flash (model), 4 generated flash
             List<Cube> cubes = new ArrayList<>(); double k = 1; List<Integer> tints = new ArrayList<>(); boolean written;
-            double[] pivot;                                  // rotation pivot of this part (bone origin, or a free-rotated cube's origin)
-            double[][] extra = identity();                   // extra local transform below the bone (a free-rotated cube's own rotation)
-            Cube soloCube;                                   // set when this part is one cube with its own exact rotation
-            String geomPath() { return mpath + "__g" + suffix; }   // geometry; wrappers use "__b" (rest pose included)
+            double[] pivot;                                  // the part's rotation pivot (owner bone origin, or the first cube's origin in owner space)
+            double[][] extra = identity();                   // the part's own transform below the owner (a display part's shared rotation about pivot)
+            boolean displayPart;
+            final Map<Cube, double[]> shift = new HashMap<>();          // per cube: where its box is written in part space (box + shift)
+            final Map<Cube, double[]> elemOrigin = new HashMap<>();     // per cube (bone parts): the element rotation origin in part space
+            final Map<Cube, double[]> elemRot = new HashMap<>();        // per cube (bone parts): {axis, angle} of the element rotation, or null
+            String geomPath() { return mpath + "__g" + suffix; }
         }
 
         CompositeModel(String name, String mpath, Map<String, Cube> all, Map<String, Cube> classic, Map<String, Cube> slimCubes, Map<String, Bone> bones,
-                       JsonObject textures, JsonObject display, Map<String, Integer> texIndex, List<double[]> texRes, double scale, double[] flashAt, boolean hands, boolean slim) {
+                       JsonObject textures, JsonObject display, Map<String, Integer> texIndex, List<double[]> texRes, double scale, double[] flashAt, boolean hands, boolean slim,
+                       List<String> hideGroups, Clip base, List<Clip> clips) {
             this.name = name; this.mpath = mpath; this.bones = bones; this.textures = textures; this.display = display;
-            this.texIndex = texIndex; this.texRes = texRes; this.scale = scale; this.flashAt = flashAt; this.hands = hands; this.slim = slim;
+            this.texIndex = texIndex; this.texRes = texRes; this.scale = scale; this.flashAt = flashAt; this.hands = hands; this.slim = slim; this.base = base;
             root.name = "root"; root.uuid = "__root"; root.origin = new double[]{8, 8, 8};
-            // group cubes by bone and kind
+            for (Clip c : clips) for (Bone b : bones.values()) if (c.animates(b.uuid)) animated.add(b.uuid);
+            boolean keepHidden = plugin.getConfig().getBoolean("pack.include-hidden-cubes", false);
+            List<java.util.regex.Pattern> hide = new ArrayList<>();
+            for (String h : hideGroups) if (h != null && !h.isBlank()) hide.add(glob(h));
+            Map<Bone, double[][]> rest = new HashMap<>();
             Map<Bone, Part[]> byBone = new LinkedHashMap<>();
-            List<Part> solo = new ArrayList<>();
+            Map<String, Part> byRotation = new LinkedHashMap<>();
+            java.util.Set<String> namesSeen = new LinkedHashSet<>();
             java.util.function.BiConsumer<Cube, Integer> add = (c, variant) -> {
                 Bone b = c.bone == null ? root : c.bone;
-                if (c.tint < 0 && !exactRotation(c)) {
-                    // a cube rotated by an angle a Java element cannot hold (30, 60, 100...): its own part, so the
-                    // display transform carries the exact rotation about the cube's own pivot
-                    Part sp = new Part(); sp.bone = b; sp.variant = variant; sp.soloCube = c; sp.pivot = c.origin.clone();
-                    sp.extra = mul(mul(translate(c.origin[0], c.origin[1], c.origin[2]), rotZYX(c.rotation)), translate(-c.origin[0], -c.origin[1], -c.origin[2]));
-                    sp.cubes.add(c); solo.add(sp);
+                for (Bone w = b; w != root && w != null; w = w.parent) {
+                    if (w.hidden && !keepHidden) { hiddenSkipped++; return; }
+                    String ln = w.name.toLowerCase(Locale.ROOT);
+                    for (var pat : hide) if (pat.matcher(ln).matches()) { hiddenByGroup++; return; }
+                }
+                if (b != root) namesSeen.add(b.name);
+                // the owner: the nearest animated bone up the chain (the root when none moves this cube at all)
+                Bone owner = b;
+                while (owner != root && owner != null && !animated.contains(owner.uuid)) owner = owner.parent;
+                if (owner == null) owner = root;
+                if (owner != b) folded++;
+                // the cube's whole static transform below the owner, at rest with the base pose: v -> B v + t
+                double[][] A = mul(invertAffine(world(owner, null, 0, rest)), world(b, null, 0, rest));
+                double[][] Rc = rotZYX(c.rotation);
+                double[][] Bm = mul(A, Rc);                                       // 4x4; its 3x3 = rotation x scale, its translation = A(o - Rc o) folded below
+                double[] o = c.origin;
+                double[] Ao = apply(A, o);
+                double[] Bo = { Bm[0][0]*o[0]+Bm[0][1]*o[1]+Bm[0][2]*o[2], Bm[1][0]*o[0]+Bm[1][1]*o[1]+Bm[1][2]*o[2], Bm[2][0]*o[0]+Bm[2][1]*o[1]+Bm[2][2]*o[2] };
+                double[] t = { Ao[0] - Bo[0], Ao[1] - Bo[1], Ao[2] - Bo[2] };    // v -> B3 v + t
+                double[][] B3 = {{Bm[0][0], Bm[0][1], Bm[0][2]}, {Bm[1][0], Bm[1][1], Bm[1][2]}, {Bm[2][0], Bm[2][1], Bm[2][2]}};
+                double[] sc = new double[3];
+                for (int j = 0; j < 3; j++) sc[j] = Math.sqrt(B3[0][j]*B3[0][j] + B3[1][j]*B3[1][j] + B3[2][j]*B3[2][j]);
+                if (sc[0] < 0.01 || sc[1] < 0.01 || sc[2] < 0.01) { alwaysHidden++; return; }   // scaled to nothing by the base pose: never visible
+                boolean unitScale = Math.abs(sc[0] - 1) < 1e-6 && Math.abs(sc[1] - 1) < 1e-6 && Math.abs(sc[2] - 1) < 1e-6;
+                double[] ea = unitScale ? CubeMath.plainAxisAngle(B3) : null;
+                if (c.tint >= 0 || ea != null) {
+                    // bone part: an element with its own rotation origin oe = o and box shifted by R^-1 (t - o) + o
+                    Part[] arr = byBone.computeIfAbsent(owner, x -> new Part[4]);
+                    if (arr[variant] == null) { arr[variant] = new Part(); arr[variant].bone = owner; arr[variant].variant = variant; arr[variant].pivot = owner.origin.clone(); }
+                    Part bp = arr[variant];
+                    bp.cubes.add(c);
+                    if (c.tint >= 0) bp.tints.add(c.tint);
+                    double[] d = { t[0] - o[0], t[1] - o[1], t[2] - o[2] };
+                    double[] rd = { B3[0][0]*d[0]+B3[1][0]*d[1]+B3[2][0]*d[2], B3[0][1]*d[0]+B3[1][1]*d[1]+B3[2][1]*d[2], B3[0][2]*d[0]+B3[1][2]*d[1]+B3[2][2]*d[2] };   // R^T d
+                    bp.shift.put(c, new double[]{ rd[0] + o[0], rd[1] + o[1], rd[2] + o[2] });
+                    bp.elemOrigin.put(c, o.clone());
+                    bp.elemRot.put(c, ea != null && ea[1] != 0 ? ea : null);
                     return;
                 }
-                Part[] arr = byBone.computeIfAbsent(b, x -> new Part[4]);
-                if (arr[variant] == null) { arr[variant] = new Part(); arr[variant].bone = b; arr[variant].variant = variant; arr[variant].pivot = b.origin.clone(); }
-                arr[variant].cubes.add(c);
-                if (c.tint >= 0) arr[variant].tints.add(c.tint);
+                // display part: cubes of this owner sharing this rotation(+scale); pivot P = the first cube's origin in owner space
+                StringBuilder rk = new StringBuilder(owner.uuid).append('|').append(variant);
+                for (double[] row : B3) for (double v : row) rk.append(',').append(Math.round(v * 10000));
+                Part dp = byRotation.get(rk.toString());
+                if (dp == null) {
+                    dp = new Part(); dp.bone = owner; dp.variant = variant; dp.displayPart = true; dp.pivot = Ao.clone();
+                    double[][] B4 = {{B3[0][0], B3[0][1], B3[0][2], 0}, {B3[1][0], B3[1][1], B3[1][2], 0}, {B3[2][0], B3[2][1], B3[2][2], 0}, {0, 0, 0, 1}};
+                    dp.extra = mul(mul(translate(Ao[0], Ao[1], Ao[2]), B4), translate(-Ao[0], -Ao[1], -Ao[2]));
+                    byRotation.put(rk.toString(), dp);
+                }
+                dp.cubes.add(c);
+                // u = v + B^-1 (t - P) + P
+                double[] P = dp.pivot;
+                double[] d = { t[0] - P[0], t[1] - P[1], t[2] - P[2] };
+                double[] bd = solve3(B3, d);
+                dp.shift.put(c, new double[]{ bd[0] + P[0], bd[1] + P[1], bd[2] + P[2] });
             };
             for (Cube c : all.values()) if (c.tint < 0) add.accept(c, c.flash ? 3 : 0);      // plain cubes (+ model flash)
             if (hands) {
@@ -1737,12 +1928,12 @@ public final class PackGenerator {
             }
             int bi = 0;
             for (var e : byBone.entrySet()) {
-                for (Part part : e.getValue()) if (part != null) { part.suffix = bi + (part.variant == 1 ? "h" : part.variant == 2 ? "s" : part.variant == 3 ? "f" : ""); parts.add(part); }
+                for (Part part : e.getValue()) if (part != null) { part.suffix = bi + (part.variant == 1 ? "h" : part.variant == 2 ? "s" : part.variant == 3 ? "f" : ""); parts.add(part); boneParts++; }
                 bi++;
             }
             int si = 0;
-            for (Part sp : solo) { sp.suffix = "c" + (si++) + (sp.variant == 3 ? "f" : ""); parts.add(sp); }
-            if (!solo.isEmpty()) report.add(name + ": " + solo.size() + " cube(s) with a free rotation angle got their own exact part");
+            for (Part dp : byRotation.values()) { dp.suffix = "c" + (si++) + (dp.variant == 3 ? "f" : ""); parts.add(dp); displayParts++; }
+            groupNames.addAll(namesSeen);
             if (flashAt != null && parts.stream().noneMatch(pt -> pt.variant == 3)) {   // generated flash cube as its own part
                 Part fp = new Part(); fp.bone = root; fp.variant = 4; fp.suffix = "flash"; fp.pivot = root.origin.clone();
                 Cube fc = new Cube(); fc.uuid = "__flash"; fc.name = "flash"; fc.flash = true;
@@ -1751,30 +1942,35 @@ public final class PackGenerator {
                 fc.origin = new double[]{flashAt[0], flashAt[1], flashAt[2]};
                 fc.faces = new JsonObject();
                 for (String f : FACE) { JsonObject face = new JsonObject(); face.add("uv", arr(0, 0, 16, 16)); face.addProperty("texture", "#flash"); fc.faces.add(f, face); }
-                fp.cubes.add(fc); parts.add(fp);
+                fp.cubes.add(fc); fp.shift.put(fc, new double[]{0, 0, 0}); fp.elemOrigin.put(fc, fc.origin.clone()); parts.add(fp);
             }
         }
 
         int partCount() { return parts.size(); }
 
-        /** Self-check: every cube corner, placed by the EMITTED representation (fitted bone-local geometry + the
-         *  part's display transform), must land where Blockbench puts it (bone chain + the cube's own rotation).
+        /** Self-check: every cube corner, placed by the EMITTED representation (part-local geometry + the part's
+         *  display transform), must land where Blockbench puts it (the cube's own bone chain + its own rotation).
          *  A part that is off is reported by name - no guessing about which part "did not translate". */
-        private void verifyPart(Part part, double[][] M, double[] Pw, double[][] Rw) {
+        private void verifyPart(Part part, double[][] M, double[] Pw, double[][] Rw, double[] sc) {
             double worst = 0; String worstCube = null;
+            Map<Bone, double[][]> cache = new HashMap<>();
             for (Cube c : part.cubes) {
-                boolean solo = part.soloCube == c;
-                CubeMath.Element el = solo ? CubeMath.plain() : CubeMath.element(c.rotation);
                 double[][] Re = CubeMath.rot3(c.rotation);
-                double[][] W = solo ? M : world(part.bone, null, 0, new HashMap<>());
+                double[][] W = world(c.bone == null ? root : c.bone, null, 0, cache);
+                double[] sh = part.shift.getOrDefault(c, new double[]{0, 0, 0});
+                double[] ea = part.elemRot.get(c);
+                double[] oe = part.elemOrigin.getOrDefault(c, c.origin);
+                double[][] Rel = null;
+                if (ea != null) { double[] deg = {0, 0, 0}; deg[(int) ea[0]] = ea[1]; Rel = CubeMath.rot3(deg); }
                 for (int corner = 0; corner < 8; corner++) {
                     double[] v = { (corner & 1) == 0 ? c.from[0] : c.to[0], (corner & 2) == 0 ? c.from[1] : c.to[1], (corner & 4) == 0 ? c.from[2] : c.to[2] };
                     double[] rel = { v[0] - c.origin[0], v[1] - c.origin[1], v[2] - c.origin[2] };
-                    double[] truth;
-                    if (solo) truth = apply(M, v);
-                    else { double[] r = { Re[0][0]*rel[0]+Re[0][1]*rel[1]+Re[0][2]*rel[2], Re[1][0]*rel[0]+Re[1][1]*rel[1]+Re[1][2]*rel[2], Re[2][0]*rel[0]+Re[2][1]*rel[1]+Re[2][2]*rel[2] }; truth = apply(W, new double[]{ r[0] + c.origin[0], r[1] + c.origin[1], r[2] + c.origin[2] }); }
-                    double[] e = CubeMath.apply(el, rel);
-                    double[] local = { e[0] + c.origin[0] - part.pivot[0], e[1] + c.origin[1] - part.pivot[1], e[2] + c.origin[2] - part.pivot[2] };
+                    double[] r = { Re[0][0]*rel[0]+Re[0][1]*rel[1]+Re[0][2]*rel[2], Re[1][0]*rel[0]+Re[1][1]*rel[1]+Re[1][2]*rel[2], Re[2][0]*rel[0]+Re[2][1]*rel[1]+Re[2][2]*rel[2] };
+                    double[] truth = apply(W, new double[]{ r[0] + c.origin[0], r[1] + c.origin[1], r[2] + c.origin[2] });
+                    // emitted: box corner + shift, element rotation about oe, then the part's display transform (rotation Rw, scale sc about pivot)
+                    double[] u = { v[0] + sh[0], v[1] + sh[1], v[2] + sh[2] };
+                    if (Rel != null) { double[] q = { u[0] - oe[0], u[1] - oe[1], u[2] - oe[2] }; u = new double[]{ Rel[0][0]*q[0]+Rel[0][1]*q[1]+Rel[0][2]*q[2] + oe[0], Rel[1][0]*q[0]+Rel[1][1]*q[1]+Rel[1][2]*q[2] + oe[1], Rel[2][0]*q[0]+Rel[2][1]*q[1]+Rel[2][2]*q[2] + oe[2] }; }
+                    double[] local = { (u[0] - part.pivot[0]) * sc[0], (u[1] - part.pivot[1]) * sc[1], (u[2] - part.pivot[2]) * sc[2] };
                     double[] got = { Pw[0] + Rw[0][0]*local[0]+Rw[0][1]*local[1]+Rw[0][2]*local[2], Pw[1] + Rw[1][0]*local[0]+Rw[1][1]*local[1]+Rw[1][2]*local[2], Pw[2] + Rw[2][0]*local[0]+Rw[2][1]*local[1]+Rw[2][2]*local[2] };
                     double err = Math.max(Math.abs(got[0] - truth[0]), Math.max(Math.abs(got[1] - truth[1]), Math.abs(got[2] - truth[2])));
                     if (err > worst) { worst = err; worstCube = c.name; }
@@ -1783,54 +1979,43 @@ public final class PackGenerator {
             if (worst > 0.75 && clampNoted.add(name + "|verify|" + part.suffix)) warnings.add(name + ": SELF-CHECK part " + part.suffix + " (cube '" + worstCube + "') is drawn " + Math.round(worst * 10) / 10.0 + " px away from where Blockbench has it - please send this model file to the developer");
         }
 
-        /** Write the per-bone geometry once (bone-local, pivot at the centre, fitted into the Java range). */
+        /** Write the per-part geometry once (part-local, pivot at the centre, fitted into the Java range). */
         private void writeGeometry(Part part) {
             if (part.written) return;
             part.written = true;
             double[] shift = {8 - part.pivot[0], 8 - part.pivot[1], 8 - part.pivot[2]};
-            // extents after the shift -> fit factor k around the centre
-            // extents from the corners AS THEY WILL BE WRITTEN (the cube's exact 90-degree part applied about its
-            // origin): a cube rotated 90 deg around a far pivot ends up somewhere else entirely, and a model with one
+            // extents of the corners AS THEY WILL BE WRITTEN -> fit factor k around the centre: a model with one
             // coordinate outside the Java range is rejected by the client as a whole (purple cube).
             double far = 0;
             for (Cube c : part.cubes) {
-                int[][] Pe = part.soloCube == c ? CubeMath.identityPerm() : CubeMath.element(c.rotation).perm();
-                for (int corner = 0; corner < 8; corner++) {
-                    double[] v = { ((corner & 1) == 0 ? c.from[0] - c.inflate : c.to[0] + c.inflate) - c.origin[0],
-                                   ((corner & 2) == 0 ? c.from[1] - c.inflate : c.to[1] + c.inflate) - c.origin[1],
-                                   ((corner & 4) == 0 ? c.from[2] - c.inflate : c.to[2] + c.inflate) - c.origin[2] };
-                    for (int i = 0; i < 3; i++) far = Math.max(far, Math.abs(Pe[i][0]*v[0]+Pe[i][1]*v[1]+Pe[i][2]*v[2] + c.origin[i] + shift[i] - 8));
+                double[] sh = part.shift.getOrDefault(c, new double[]{0, 0, 0});
+                for (int i = 0; i < 3; i++) {
+                    far = Math.max(far, Math.abs(Math.min(c.from[i], c.to[i]) - c.inflate + sh[i] + shift[i] - 8));
+                    far = Math.max(far, Math.abs(Math.max(c.from[i], c.to[i]) + c.inflate + sh[i] + shift[i] - 8));
                 }
             }
             part.k = far > 23.9 ? 23.9 / far : 1.0;
             JsonArray elements = new JsonArray();
             int localTint = 0;
             for (Cube c : part.cubes) {
-                boolean solo = part.soloCube == c;            // its rotation lives in the display transform
-                CubeMath.Element el = solo ? CubeMath.plain() : CubeMath.element(c.rotation);
-                int[][] Pe = el.perm();
-                int ca = el.axis();
-                double cs = el.angle();
-                double[] lo = {1e9, 1e9, 1e9}, hi = {-1e9, -1e9, -1e9};
-                for (int corner = 0; corner < 8; corner++) {
-                    double[] v = { ((corner & 1) == 0 ? c.from[0] - c.inflate : c.to[0] + c.inflate) - c.origin[0],
-                                   ((corner & 2) == 0 ? c.from[1] - c.inflate : c.to[1] + c.inflate) - c.origin[1],
-                                   ((corner & 4) == 0 ? c.from[2] - c.inflate : c.to[2] + c.inflate) - c.origin[2] };
-                    double[] w = { Pe[0][0]*v[0]+Pe[0][1]*v[1]+Pe[0][2]*v[2] + c.origin[0], Pe[1][0]*v[0]+Pe[1][1]*v[1]+Pe[1][2]*v[2] + c.origin[1], Pe[2][0]*v[0]+Pe[2][1]*v[1]+Pe[2][2]*v[2] + c.origin[2] };
-                    for (int i = 0; i < 3; i++) { double q = 8 + (w[i] + shift[i] - 8) * part.k; lo[i] = Math.min(lo[i], q); hi[i] = Math.max(hi[i], q); }
-                }
+                double[] sh = part.shift.getOrDefault(c, new double[]{0, 0, 0});
+                double[] ea = part.elemRot.get(c);
+                double[] oe = part.elemOrigin.getOrDefault(c, c.origin);
+                double[] lo = new double[3], hi = new double[3];
                 for (int i = 0; i < 3; i++) {
-                    if (lo[i] < -16.01 || hi[i] > 32.01) { if (clampNoted.add(name + "|cube|" + c.name)) warnings.add(name + ": cube '" + c.name + "' (part " + part.suffix + ") still exceeds the Java model range after fitting (" + Math.round(lo[i]) + ".." + Math.round(hi[i]) + " px on axis " + "xyz".charAt(i) + ") and is cut - it will look wrong; move its pivot nearer the cube or split the group"); }
-                    lo[i] = Math.max(-16, Math.min(32, lo[i])); hi[i] = Math.max(-16, Math.min(32, hi[i]));
+                    double a = 8 + (Math.min(c.from[i], c.to[i]) - c.inflate + sh[i] + shift[i] - 8) * part.k;
+                    double b = 8 + (Math.max(c.from[i], c.to[i]) + c.inflate + sh[i] + shift[i] - 8) * part.k;
+                    if (a < -16.01 || b > 32.01) { if (clampNoted.add(name + "|cube|" + c.name)) warnings.add(name + ": cube '" + c.name + "' (part " + part.suffix + ") still exceeds the Java model range after fitting (" + Math.round(a) + ".." + Math.round(b) + " px on axis " + "xyz".charAt(i) + ") and is cut - it will look wrong; move its pivot nearer the cube or split the group"); }
+                    lo[i] = Math.max(-16, Math.min(32, a)); hi[i] = Math.max(-16, Math.min(32, b));
                 }
                 JsonObject e = new JsonObject();
                 e.add("from", arr(lo));
                 e.add("to", arr(hi));
-                if (cs != 0) {
+                if (ea != null) {
                     JsonObject rotation = new JsonObject();
-                    rotation.add("origin", arr(8 + (c.origin[0] + shift[0] - 8) * part.k, 8 + (c.origin[1] + shift[1] - 8) * part.k, 8 + (c.origin[2] + shift[2] - 8) * part.k));
-                    rotation.addProperty("axis", ca == 0 ? "x" : ca == 1 ? "y" : "z");
-                    rotation.addProperty("angle", cs);
+                    rotation.add("origin", arr(8 + (oe[0] + shift[0] - 8) * part.k, 8 + (oe[1] + shift[1] - 8) * part.k, 8 + (oe[2] + shift[2] - 8) * part.k));
+                    rotation.addProperty("axis", ea[0] == 0 ? "x" : ea[0] == 1 ? "y" : "z");
+                    rotation.addProperty("angle", ea[1]);
                     e.add("rotation", rotation);
                 }
                 if (c.flash) e.addProperty("shade", false);
@@ -1844,11 +2029,10 @@ public final class PackGenerator {
                         if (!anyUv) srcFaces = boxUvFaces(c, srcFaces);
                     }
                 }
-                JsonObject cfaces = remapFaces(srcFaces, Pe);
                 JsonObject faces = new JsonObject();
                 for (String f : FACE) {
-                    if (!cfaces.has(f)) continue;
-                    JsonObject bf = cfaces.getAsJsonObject(f);
+                    if (!srcFaces.has(f) || !srcFaces.get(f).isJsonObject()) continue;
+                    JsonObject bf = srcFaces.getAsJsonObject(f);
                     JsonObject face = new JsonObject();
                     if (c.tint >= 0) {
                         face.add("uv", arr(0, 0, 16, 16));
@@ -1879,47 +2063,70 @@ public final class PackGenerator {
             put("assets/" + NS + "/models/item/" + part.geomPath() + ".json", GSON.toJson(model));
         }
 
-        /** Exact world matrix of a bone at this frame (rest + animation, full chain, no snapping). */
+        /** Exact world matrix of a bone at this frame: rest pose + base pose + the clip at time t, full chain,
+         *  rotation, position AND scale (scale 0 is how gun packs hide a spare magazine or a bullet). */
         private double[][] world(Bone b, Clip clip, double t, Map<Bone, double[][]> cache) {
-            if (b == root) return identity();
+            if (b == root || b == null) return identity();
             double[][] w = cache.get(b);
             if (w != null) return w;
-            double[] r = b.rotation.clone(), p = {0, 0, 0};
-            if (clip != null) {
-                double[] ar = sample(clip.rot.get(b.uuid), t), ap = sample(clip.pos.get(b.uuid), t);
-                for (int i = 0; i < 3; i++) { r[i] += ar[i] * animRotSign[i]; p[i] += ap[i] * animPosSign[i] * scale; }
+            double[] r = b.rotation.clone(), p = {0, 0, 0}, s = {1, 1, 1};
+            if (base != null) {
+                double[] ar = sampleTrack(base.rot.get(b.uuid), 0, 0), ap = sampleTrack(base.pos.get(b.uuid), 0, 0), as = sampleTrack(base.scale.get(b.uuid), 0, 1);
+                for (int i = 0; i < 3; i++) { r[i] += ar[i] * animRotSign[i]; p[i] += ap[i] * animPosSign[i] * scale; s[i] *= as[i]; }
             }
-            double[][] local = mul(mul(translate(b.origin[0] + p[0], b.origin[1] + p[1], b.origin[2] + p[2]), rotZYX(r)), translate(-b.origin[0], -b.origin[1], -b.origin[2]));
+            if (clip != null) {
+                double[] ar = sampleTrack(clip.rot.get(b.uuid), t, 0), ap = sampleTrack(clip.pos.get(b.uuid), t, 0), as = sampleTrack(clip.scale.get(b.uuid), t, 1);
+                for (int i = 0; i < 3; i++) { r[i] += ar[i] * animRotSign[i]; p[i] += ap[i] * animPosSign[i] * scale; s[i] *= as[i]; }
+            }
+            double[][] local = mul(mul(mul(translate(b.origin[0] + p[0], b.origin[1] + p[1], b.origin[2] + p[2]), rotZYX(r)), scale4(s)), translate(-b.origin[0], -b.origin[1], -b.origin[2]));
             w = b.parent == null ? local : mul(world(b.parent, clip, t, cache), local);
             cache.put(b, w);
             return w;
         }
 
-        /** Emit one pose (rest when clip == null, else the clip at time t): wrappers per part + composite lists. */
+        // ---- poses. Every distinct part pose becomes exactly one wrapper file ({"parent": geometry, "display": ...}),
+        // shared by every frame of every clip that shows the part like that; a frame is just its list of wrappers.
+        /** wrapper json -> its path: one file per distinct pose of a part. */
+        final Map<String, String> wrapperByJson = new HashMap<>();
+        int wrapperCount;
         /** The rest pose's parts (no hands, no flash): what every context except first person shows for every frame. */
         List<Object[]> restPlain;
-        /** part suffix -> {rest wrapper path, its display json}: a frame part that did not move reuses the rest file. */
-        final Map<String, String[]> restWrappers = new HashMap<>();
-        int reusedWrappers;
-        /** The first part wrapper of the last emit (frames whose parts all share rest files point here). */
-        String lastPrimary;
+        // the last computed pose
+        private List<Object[]> lastPlain, lastClassic, lastSlim; private String lastPrimary;
 
-        void emit(String cmd, String framePath, Clip clip, double t, boolean flashFrame) {
+        /** The rest pose (clip == null) with every display context, written as the model's own files. Returns the first wrapper path. */
+        String emitPose(String cmd, String framePath, Clip clip, double t, boolean flashFrame) {
+            pose(clip, t, flashFrame);
+            restPlain = lastPlain;
+            return register(cmd);
+        }
+
+        /** Compute the pose at (clip, t): writes any wrapper not written yet and keeps the part lists. Returns a
+         *  signature that is equal for two poses that would draw identically (so a frame that did not change is held). */
+        String pose(Clip clip, double t, boolean flashFrame) {
+            boolean rest = clip == null;
+            boolean animateThird = plugin.getConfig().getBoolean("third-person.animate", false);
+            String[] ctxs = rest ? CTX : animateThird ? CTX_FP_TP : CTX_FP;
             Map<Bone, double[][]> cache = new HashMap<>();
             lastPrimary = null;
             List<Object[]> plain = new ArrayList<>(), classic = new ArrayList<>(), slimL = new ArrayList<>();
+            StringBuilder sig = new StringBuilder();
             for (Part part : parts) {
                 if ((part.variant == 3 || part.variant == 4) && !flashFrame) continue;
                 writeGeometry(part);
                 double[][] M = mul(world(part.bone, clip, t, cache), part.extra);
                 double[] Pw = apply(M, part.pivot);
-                double[][] Rw = {{M[0][0], M[0][1], M[0][2]}, {M[1][0], M[1][1], M[1][2]}, {M[2][0], M[2][1], M[2][2]}};
+                // M's 3x3 is R * S (scale in the part's own frame): the column lengths are the scale, the rest the rotation
+                double[] sc = new double[3];
+                for (int j = 0; j < 3; j++) sc[j] = Math.sqrt(M[0][j]*M[0][j] + M[1][j]*M[1][j] + M[2][j]*M[2][j]);
+                if (sc[0] < 0.01 || sc[1] < 0.01 || sc[2] < 0.01) { sig.append('-'); continue; }   // scaled to nothing: hidden in this pose
+                double[][] Rw = {{M[0][0]/sc[0], M[0][1]/sc[1], M[0][2]/sc[2]}, {M[1][0]/sc[0], M[1][1]/sc[1], M[1][2]/sc[2]}, {M[2][0]/sc[0], M[2][1]/sc[1], M[2][2]/sc[2]}};
                 JsonObject disp = new JsonObject();
-                for (String ctx : CTX) {
-                    JsonObject base = display.has(ctx) ? display.getAsJsonObject(ctx) : null;
-                    double[] br = base != null ? vec(base.get("rotation")) : new double[]{0, 0, 0};
-                    double[] bt = base != null ? vec(base.get("translation")) : new double[]{0, 0, 0};
-                    double[] bs = base != null ? vec(base.get("scale")) : new double[]{1, 1, 1};
+                for (String ctx : ctxs) {
+                    JsonObject bse = display.has(ctx) ? display.getAsJsonObject(ctx) : null;
+                    double[] br = bse != null ? vec(bse.get("rotation")) : new double[]{0, 0, 0};
+                    double[] bt = bse != null ? vec(bse.get("translation")) : new double[]{0, 0, 0};
+                    double[] bs = bse != null ? vec(bse.get("scale")) : new double[]{1, 1, 1};
                     double[][] Rd = rotXYZ(br);
                     double[] eul = eulerXYZ(mul3(Rd, Rw));
                     double m = (bs[0] + bs[1] + bs[2]) / 3;
@@ -1928,40 +2135,79 @@ public final class PackGenerator {
                     double[] tr3 = { bt[0] + m * ro[0], bt[1] + m * ro[1], bt[2] + m * ro[2] };
                     if ((Math.abs(tr3[0]) > 80 || Math.abs(tr3[1]) > 80 || Math.abs(tr3[2]) > 80) && clampNoted.add(name + "|" + ctx))
                         warnings.add(name + ": a part sits " + Math.round(Math.max(Math.abs(tr3[0]), Math.max(Math.abs(tr3[1]), Math.abs(tr3[2])))) + " px from the model centre in '" + ctx + "' - beyond the client's 80 px limit, so it is drawn out of place (floating). Shrink the display scale for that state (/firearms pose " + name + " " + ctx.replace("person_righthand", "").replace("person_lefthand", "") + " scale ...) or move the geometry nearer the centre");
-                    disp.add(ctx, transform(eul,
-                        new double[]{ clamp80(tr3[0]), clamp80(tr3[1]), clamp80(tr3[2]) },
-                        new double[]{ Math.min(4, bs[0] / part.k), Math.min(4, bs[1] / part.k), Math.min(4, bs[2] / part.k) }));
+                    disp.add(ctx, transform(
+                        new double[]{ q(eul[0], 0.01), q(eul[1], 0.01), q(eul[2], 0.01) },
+                        new double[]{ q(clamp80(tr3[0]), 0.01), q(clamp80(tr3[1]), 0.01), q(clamp80(tr3[2]), 0.01) },
+                        new double[]{ q(Math.min(4, bs[0] * sc[0] / part.k), 0.0005), q(Math.min(4, bs[1] * sc[1] / part.k), 0.0005), q(Math.min(4, bs[2] * sc[2] / part.k), 0.0005) }));
                 }
-                if (clip == null) verifyPart(part, M, Pw, Rw);
-                String wrapPath = framePath + "__b" + part.suffix;
+                if (rest) verifyPart(part, M, Pw, Rw, sc);
                 JsonObject wrap = new JsonObject();
                 wrap.addProperty("parent", NS + ":item/" + part.geomPath());
                 wrap.add("display", disp);
                 String wrapJson = GSON.toJson(wrap);
-                String[] rest = restWrappers.get(part.suffix);
-                if (clip == null) restWrappers.put(part.suffix, new String[]{wrapPath, wrapJson});
-                else if (rest != null && rest[1].equals(wrapJson)) { wrapPath = rest[0]; reusedWrappers++; reusedWrappersTotal++; }   // the part did not move: no new file
-                if (clip == null || rest == null || !rest[1].equals(wrapJson)) put("assets/" + NS + "/models/item/" + wrapPath + ".json", wrapJson);
+                String wrapPath = wrapperByJson.get(wrapJson);
+                if (wrapPath == null) {
+                    wrapPath = rest ? mpath + "__b" + part.suffix : mpath + "__w" + (wrapperCount++);
+                    wrapperByJson.put(wrapJson, wrapPath);
+                    put("assets/" + NS + "/models/item/" + wrapPath + ".json", wrapJson);
+                } else reusedWrappersTotal++;
                 if (lastPrimary == null) lastPrimary = wrapPath;
+                sig.append(wrapPath).append(';');
                 Object[] entry = { wrapPath, part.tints };
                 if (part.variant == 1) classic.add(entry);
                 else if (part.variant == 2) slimL.add(entry);
                 else plain.add(entry);
             }
-            List<Object[]> cl = new ArrayList<>(plain); cl.addAll(classic);
-            List<Object[]> sl = new ArrayList<>(plain); sl.addAll(slim ? slimL : classic);
-            if (clip == null) restPlain = plain;
+            lastPlain = plain;
+            lastClassic = new ArrayList<>(plain); lastClassic.addAll(classic);
+            lastSlim = new ArrayList<>(plain); lastSlim.addAll(slim ? slimL : classic);
+            return sig.toString();
+        }
+
+        /** Register the last computed pose under a custom_model_data string. Returns its primary model path. */
+        String register(String cmd) {
             // Third person, ground, item frames, GUI fallback: the REST pose of the gun, never a frame - the animation
             // (per-part display rotations) exists only in the first-person entries. Hands and the flash are first-person
             // parts anyway (variants 1-4 never reach `plain` of the rest pose).
             boolean animateThird = plugin.getConfig().getBoolean("third-person.animate", false);
-            List<Object[]> third = clip != null && !animateThird && restPlain != null ? restPlain : plain;
-            compositeParts.put(cmd, List.of(third, hands ? cl : plain, hands ? sl : plain));
+            List<Object[]> third = !animateThird && restPlain != null ? restPlain : lastPlain;
+            compositeParts.put(cmd, List.of(third, hands ? lastClassic : lastPlain, hands ? lastSlim : lastPlain));
+            return lastPrimary != null ? lastPrimary : mpath + "__b0";
         }
     }
 
-    /** Can a Java element hold this cube's rotation exactly (after the 90-degree split: one axis at a 22.5 step)? */
-    private static boolean exactRotation(Cube c) { return CubeMath.exact(c.rotation); }
+    /** A "name" or "name*" pattern (case-insensitive) as used by hide-groups / skip-animations. */
+    private static java.util.regex.Pattern glob(String h) {
+        return java.util.regex.Pattern.compile(("\\Q" + h.trim().toLowerCase(Locale.ROOT) + "\\E").replace("*", "\\E.*\\Q"));
+    }
+
+    /** Inverse of an affine 4x4 (rotation x scale + translation). */
+    private static double[][] invertAffine(double[][] m) {
+        double[][] a = {{m[0][0], m[0][1], m[0][2]}, {m[1][0], m[1][1], m[1][2]}, {m[2][0], m[2][1], m[2][2]}};
+        double det = a[0][0]*(a[1][1]*a[2][2]-a[1][2]*a[2][1]) - a[0][1]*(a[1][0]*a[2][2]-a[1][2]*a[2][0]) + a[0][2]*(a[1][0]*a[2][1]-a[1][1]*a[2][0]);
+        if (Math.abs(det) < 1e-12) return identity();
+        double[][] inv = new double[3][3];
+        inv[0][0] = (a[1][1]*a[2][2]-a[1][2]*a[2][1])/det; inv[0][1] = (a[0][2]*a[2][1]-a[0][1]*a[2][2])/det; inv[0][2] = (a[0][1]*a[1][2]-a[0][2]*a[1][1])/det;
+        inv[1][0] = (a[1][2]*a[2][0]-a[1][0]*a[2][2])/det; inv[1][1] = (a[0][0]*a[2][2]-a[0][2]*a[2][0])/det; inv[1][2] = (a[0][2]*a[1][0]-a[0][0]*a[1][2])/det;
+        inv[2][0] = (a[1][0]*a[2][1]-a[1][1]*a[2][0])/det; inv[2][1] = (a[0][1]*a[2][0]-a[0][0]*a[2][1])/det; inv[2][2] = (a[0][0]*a[1][1]-a[0][1]*a[1][0])/det;
+        double[] t = {m[0][3], m[1][3], m[2][3]};
+        double[][] r = identity();
+        for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) r[i][j] = inv[i][j]; r[i][3] = -(inv[i][0]*t[0] + inv[i][1]*t[1] + inv[i][2]*t[2]); }
+        return r;
+    }
+
+    /** x with B x = d (3x3, via the inverse). */
+    private static double[] solve3(double[][] B, double[] d) {
+        double[][] m4 = {{B[0][0], B[0][1], B[0][2], 0}, {B[1][0], B[1][1], B[1][2], 0}, {B[2][0], B[2][1], B[2][2], 0}, {0, 0, 0, 1}};
+        double[][] inv = invertAffine(m4);
+        return new double[]{ inv[0][0]*d[0]+inv[0][1]*d[1]+inv[0][2]*d[2], inv[1][0]*d[0]+inv[1][1]*d[1]+inv[1][2]*d[2], inv[2][0]*d[0]+inv[2][1]*d[1]+inv[2][2]*d[2] };
+    }
+
+    /** Quantise a display value: identical poses must give identical json (so they share one file), and a change
+     *  below what a screen can show must not create a new frame. */
+    private static double q(double v, double step) { double r = Math.round(v / step) * step; return r == 0 ? 0 : Math.round(r * 1e6) / 1e6; }
+    private static double[][] scale4(double[] s) { return new double[][]{{s[0],0,0,0},{0,s[1],0,0},{0,0,s[2],0},{0,0,0,1}}; }
+
 
     private static double[][] rotXYZ(double[] deg) {
         double x = Math.toRadians(deg[0]), y = Math.toRadians(deg[1]), z = Math.toRadians(deg[2]);
@@ -2013,30 +2259,7 @@ public final class PackGenerator {
     }
 
     /** Linear sample of a channel's keyframes at time t (seconds); zeros if none. */
-    private static double[] sample(List<JsonObject> keys, double t) {
-        if (keys == null || keys.isEmpty()) return new double[]{0, 0, 0};
-        keys.sort((a, b) -> Double.compare(num(a.get("time"), 0), num(b.get("time"), 0)));
-        JsonObject prev = null, next = null;
-        for (JsonObject k : keys) {
-            double kt = num(k.get("time"), 0);
-            if (kt <= t) prev = k;
-            if (kt >= t) { next = k; break; }
-        }
-        if (prev == null) return point(next);
-        if (next == null || prev == next) return point(prev);
-        double t0 = num(prev.get("time"), 0), t1 = num(next.get("time"), 0);
-        double f = t1 - t0 < 1e-6 ? 0 : (t - t0) / (t1 - t0);
-        double[] a = point(prev), b = point(next);
-        return new double[]{ a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f };
-    }
-
-    private static double[] point(JsonObject k) {
-        if (k == null || !k.has("data_points")) return new double[]{0, 0, 0};
-        JsonArray dp = k.getAsJsonArray("data_points");
-        if (dp.isEmpty()) return new double[]{0, 0, 0};
-        JsonObject p = dp.get(0).getAsJsonObject();
-        return new double[]{ num(p.get("x"), 0), num(p.get("y"), 0), num(p.get("z"), 0) };
-    }
+    private static double[] sampleTrack(Track tr, double t, double neutral) { return tr == null ? new double[]{neutral, neutral, neutral} : tr.at(t); }
 
     // ------------------------------------------------------------------ 3x3 rotation helpers
     private static double[][] rot3(double[] deg) {

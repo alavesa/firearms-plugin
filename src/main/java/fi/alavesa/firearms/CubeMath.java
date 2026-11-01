@@ -31,6 +31,41 @@ public final class CubeMath {
     /** The element without any residual (a cube whose exact rotation lives elsewhere, e.g. in a display transform). */
     public static Element plain() { return new Element(identityPerm(), 0, 0); }
 
+    /** Can a Java element hold this rotation AS IT IS - no rotation, or one axis at -45, -22.5, 22.5 or 45?
+     *  Anything else (two axes, 90, 30, 7 degrees...) is carried by a display transform instead of an element
+     *  rotation: no axis permutation and no face remapping, so no way to end up on the wrong axis. */
+    public static boolean plainElement(double[] rotationDeg) {
+        int nz = -1;
+        for (int i = 0; i < 3; i++) if (Math.abs(rotationDeg[i]) > 1e-6) { if (nz >= 0) return false; nz = i; }
+        if (nz < 0) return true;
+        double a = Math.abs(rotationDeg[nz]);
+        return Math.abs(a - 22.5) < 1e-6 || Math.abs(a - 45) < 1e-6;
+    }
+
+    /** {axis, angle} when the 3x3 rotation R is exactly one axis at 0, +-22.5 or +-45 degrees (what a Java element
+     *  can hold as it is), else null. */
+    public static double[] plainAxisAngle(double[][] R) {
+        for (int axis = 0; axis < 3; axis++) for (double ang : new double[]{0, 22.5, -22.5, 45, -45}) {
+            double[] deg = {0, 0, 0}; deg[axis] = ang;
+            double[][] C = rot3(deg);
+            boolean same = true;
+            for (int i = 0; i < 3 && same; i++) for (int j = 0; j < 3; j++) if (Math.abs(C[i][j] - R[i][j]) > 1e-6) { same = false; break; }
+            if (same) return new double[]{axis, ang};
+        }
+        return null;
+    }
+
+    /** A cube rotated by R about its own origin o, drawn inside a part that rotates by the same R about pivot P:
+     *  the cube's box has to be written shifted by (R^-1 - I)(o - P), so that R(u - P) + P == R(v - o) + o for
+     *  every corner v (u = v + shift). Zero when the cube's origin IS the pivot. */
+    public static double[] shiftForPivot(double[] rotationDeg, double[] origin, double[] pivot) {
+        double[][] R = rot3(rotationDeg);
+        double[] d = { origin[0] - pivot[0], origin[1] - pivot[1], origin[2] - pivot[2] };
+        // R^-1 = R^T for a rotation
+        double[] rd = { R[0][0]*d[0]+R[1][0]*d[1]+R[2][0]*d[2], R[0][1]*d[0]+R[1][1]*d[1]+R[2][1]*d[2], R[0][2]*d[0]+R[1][2]*d[1]+R[2][2]*d[2] };
+        return new double[]{ rd[0] - d[0], rd[1] - d[1], rd[2] - d[2] };
+    }
+
     /** Where the element puts a point given relative to the cube's origin: R_element · P · v. */
     public static double[] apply(Element e, double[] v) {
         double[] p = { e.perm()[0][0]*v[0]+e.perm()[0][1]*v[1]+e.perm()[0][2]*v[2], e.perm()[1][0]*v[0]+e.perm()[1][1]*v[1]+e.perm()[1][2]*v[2], e.perm()[2][0]*v[0]+e.perm()[2][1]*v[1]+e.perm()[2][2]*v[2] };

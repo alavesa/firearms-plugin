@@ -423,7 +423,7 @@ public final class FireController implements Listener {
                 boolean customEquip = gun.equipSound() != null && !gun.equipSound().isEmpty();
                 p.playSound(p.getLocation(), customEquip ? gun.equipSound() : "minecraft:item.armor.equip_chain", customEquip ? 1f : 0.5f, customEquip ? 1f : 1.5f);
                 int[] a = registry.anim(gun.model(), "equip");
-                int ticks = gun.equipSeconds() > 0 ? (int) Math.round(gun.equipSeconds() * 20) : a != null ? a[0] * a[1] : 10;
+                int ticks = gun.equipSeconds() > 0 ? (int) Math.round(gun.equipSeconds() * 20) : a != null ? registry.clipTicks(gun.model(), "equip") : 10;
                 drawUntil.put(p.getUniqueId(), plugin.getServer().getCurrentTick() + ticks);
                 playClip(p, gun, held, "equip", ticks);
             }
@@ -513,8 +513,13 @@ public final class FireController implements Listener {
     private void playClip(Player p, GunType gun, ItemStack item, String clip, int totalTicks, Runnable then) {
         int[] a = registry.anim(gun.model(), clip);
         if (a == null) { if (then != null) then.run(); return; }
-        if (totalTicks > 0) a = new int[]{ a[0], Math.max(1, (int) Math.round((double) totalTicks / a[0])) };
-        final int holdUntil = Math.max(totalTicks, a[0] * a[1]);
+        // When each frame starts: the pack's own schedule (frames that did not change were not written, so the
+        // previous one holds), else evenly spaced. totalTicks > 0 stretches the whole schedule to that length.
+        int length = Math.max(1, registry.clipTicks(gun.model(), clip));
+        int[] at = registry.frameStarts(gun.model(), clip);
+        if (at == null) { at = new int[a[0]]; for (int i = 0; i < a[0]; i++) at[i] = i * a[1]; }
+        double stretch = totalTicks > 0 ? (double) totalTicks / length : 1.0;
+        final int holdUntil = Math.max(totalTicks, (int) Math.round(length * stretch));
         cancelClip(p);
         int slot = p.getInventory().getHeldItemSlot();
         String uid = uid(item);
@@ -525,17 +530,17 @@ public final class FireController implements Listener {
                 ItemStack cur = p.getInventory().getItem(slot);
                 if (!uid.equals(uid(cur)) || p.getInventory().getHeldItemSlot() != slot) { cancelClip(p); return; }
                 registry.setModel(cur, gun.model() + "_" + clip + "_" + frame);
-            }, (long) (i - 1) * a[1]));
+            }, Math.round(at[i - 1] * stretch)));
         }
         // Sound keyframes from the .bbmodel (effects animator -> sounds.json by /firearms pack).
         for (String snd : registry.animSounds(gun.model(), clip)) {
             int colon = snd.indexOf(':');
             if (colon <= 0) continue;
-            long at; try { at = Long.parseLong(snd.substring(0, colon)); } catch (NumberFormatException e) { continue; }
+            long sndAt; try { sndAt = Long.parseLong(snd.substring(0, colon)); } catch (NumberFormatException e) { continue; }
             String id = snd.substring(colon + 1);
             tasks.add(plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
                 if (p.isOnline() && uid.equals(uid(p.getInventory().getItem(slot)))) p.getWorld().playSound(p.getLocation(), id, 1f, 1f);
-            }, at));
+            }, Math.round(sndAt * stretch)));
         }
         tasks.add(plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
             animTasks.remove(p.getUniqueId());

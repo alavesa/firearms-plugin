@@ -225,8 +225,19 @@ anim:
   # composite (default): every animated group is its own sub-model with an EXACT display transform per frame -
   #   no 22.5 degree rounding at all. baked: the older single-model mode (rotations rounded to 22.5 steps).
   mode: composite
-  frame-ticks: 1         # auto frame spacing when an animation has no Blockbench snapping and no explicit frames
-  max-frames: 120        # cap per clip (per gun: guns.yml anim.max-frames); a capped clip is reported by /firearms pack
+  frame-ticks: 1         # ticks between sampled frames (1 = one frame per server tick, the most the client can be shown)
+  max-frames: 200        # cap per clip (per gun: guns.yml anim.max-frames); a capped clip is reported by /firearms pack
+  # Frames whose pose is identical to the previous one are not written: the previous frame simply holds, and
+  # anim-index.yml says when each written frame starts. Every distinct pose of a part is ONE file shared by every
+  # frame of every clip that shows it like that. (There is no client-side interpolation between item models in
+  # vanilla Minecraft - see docs/ANIMATIONS.md - so frames are the only way; this keeps them to what actually changes.)
+  # Animations whose name maps to no clip the plugin plays (switch_auto, static_semi...) are not baked:
+  bake-unknown: false
+  # Frames per second a clip is sampled at (20 = one per server tick, the most a client can be shown). Long clips
+  # like a 10 s inspect are the bulk of a pack; 10 fps halves them. Per gun: guns.yml anim: { inspect: { fps: 10 } }
+  fps:
+    default: 20
+    inspect: 10
   # Which animation NAMES in the .bbmodel mean which clip (exact name first, then "contains"). Add your own words,
   # e.g. "rel" for reload. Per gun: guns.yml anim-names: with the same layout.
   names:
@@ -238,6 +249,8 @@ anim:
     aim:     [aim, ads, scope, aiming, sight]   # its END pose is the aiming pose (one model, shown client-side)
     aim_in:  [aim_in, ads_in, scope_in]         # recognised and skipped: aiming is not frame-based
     aim_out: [aim_out, ads_out, scope_out]
+    base:    [static_idle, idle, static]        # the BASE pose: layered under the rest model and every frame, never a clip
+                                                # (gun packs hide spare magazines / show the hands with it, scale 0 = hidden)
   # Clips that keep EVERY matching animation as a variant played at random (reload, reload_2, reload_3 ...). Name
   # them in the .bbmodel e.g. "reload", "reload fast", "reload_b" - all match the reload keywords.
   random-variants: [reload, inspect]

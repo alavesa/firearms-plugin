@@ -40,4 +40,34 @@ class CubeMathTest {
         assertTrue(CubeMath.exact(new double[]{0, 22.5, 0}));
         assertTrue(CubeMath.exact(new double[]{90, 45, 0}));
     }
+
+    @Test
+    void plainElementAcceptsOnlyOneAxisAt22Point5Steps() {
+        assertTrue(CubeMath.plainElement(new double[]{0, 0, 0}));
+        assertTrue(CubeMath.plainElement(new double[]{0, -22.5, 0}));
+        assertTrue(CubeMath.plainElement(new double[]{45, 0, 0}));
+        assertFalse(CubeMath.plainElement(new double[]{90, 0, 0}));      // 90: a permutation, not an element rotation
+        assertFalse(CubeMath.plainElement(new double[]{0, 0, 30}));
+        assertFalse(CubeMath.plainElement(new double[]{22.5, 22.5, 0}));  // two axes
+        assertFalse(CubeMath.plainElement(new double[]{7, 0, 0}));
+    }
+
+    @Test
+    void shiftForPivotPutsACubeWhereItsOwnRotationWould() {
+        double[] rot = {18, 0, -30};
+        double[] origin = {3, 9, -4}, pivot = {-2, 7, 1};
+        double[] sh = CubeMath.shiftForPivot(rot, origin, pivot);
+        double[][] R = CubeMath.rot3(rot);
+        double[] corner = {4.5, 10, -2};
+        // truth: rotate the corner about the cube's own origin
+        double[] d = {corner[0] - origin[0], corner[1] - origin[1], corner[2] - origin[2]};
+        double[] truth = new double[3];
+        for (int i = 0; i < 3; i++) truth[i] = R[i][0]*d[0] + R[i][1]*d[1] + R[i][2]*d[2] + origin[i];
+        // emitted: the shifted corner rotated about the part pivot
+        double[] u = {corner[0] + sh[0] - pivot[0], corner[1] + sh[1] - pivot[1], corner[2] + sh[2] - pivot[2]};
+        double[] got = new double[3];
+        for (int i = 0; i < 3; i++) got[i] = R[i][0]*u[0] + R[i][1]*u[1] + R[i][2]*u[2] + pivot[i];
+        assertArrayEquals(truth, got, 1e-9);
+        assertArrayEquals(new double[]{0, 0, 0}, CubeMath.shiftForPivot(rot, origin, origin), 1e-12);
+    }
 }

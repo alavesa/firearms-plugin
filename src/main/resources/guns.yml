@@ -20,7 +20,12 @@
 #  INSPECT        an animation named "inspect" in the .bbmodel plays on F when the gun is full or you have nothing to load
 #  anim-names     per-gun animation name keywords, e.g.  anim-names: { reload: [rel, r], fire: [bang] }
 #  anim           per-gun clip settings:  anim: { max-frames: 30, reload: { frames: 12 }, fire: { frames: 4 } }
-#                 (frames default = the animation's own Blockbench snapping x length, else length x 20)
+#                 (frames default = one per server tick over the animation's length; unchanged frames are held, not written)
+#  hide-groups    .bbmodel groups left out of the pack, e.g. [mag_extended_1, mag_extended_2, stock_folded*, sight_folded]
+#                 (gun packs made for other systems carry every attachment variant at once; * matches any ending).
+#                 /firearms pack lists every group that holds cubes in pack-report.txt
+#  skip-animations  .bbmodel animations not baked at all, e.g. ["*_semi*", "inspect_1"] - gun packs made for other
+#                 systems carry fire-mode variants of every animation; each one baked is more frames in the pack
 #  FLASH          a cube or group named "flash" / "muzzle_flash" in the .bbmodel IS the muzzle flash: hidden normally,
 #                 shown on the fire frames with its own texture (no generated flash then)
 #  accuracy       hip-fire spread in degrees (0 = laser)

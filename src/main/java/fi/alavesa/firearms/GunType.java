@@ -39,7 +39,9 @@ public record GunType(
     String reloadSound,     // optional: played when a reload starts (e.g. firearms:ak_reload); "" = default
     String equipSound,      // optional: played when the gun is drawn
     String emptySound,      // optional: dry-fire click
-    double equipSeconds     // draw time: the equip clip is stretched/compressed to this and the gun can't fire meanwhile (0 = clip length / 0.5 s)
+    double equipSeconds,    // draw time: the equip clip is stretched/compressed to this and the gun can't fire meanwhile (0 = clip length / 0.5 s)
+    java.util.List<String> hideGroups,  // .bbmodel group names (or patterns with *) left out of the pack: spare magazines, alternative stocks...
+    java.util.List<String> skipAnimations   // .bbmodel animation names (or patterns with *) not baked at all, e.g. [*_semi*]
 ) {
     public long shotIntervalMs() { return fireRate <= 0 ? 1000 : Math.round(1000.0 / fireRate); }
     public boolean usesMag() { return magId != null && !magId.isEmpty() && !magId.equalsIgnoreCase("none"); }

@@ -84,7 +84,7 @@ public final class Grenades implements Listener {
         // LEFT-click: unpin clip, then throw clip, then the grenade leaves the hand. With cook: true the fuse
         // starts at the pin pull, so the time the animations take is already burning.
         int[] un = registry.anim(g.model(), "unpin"), th = registry.anim(g.model(), "throw");
-        int animTicks = (un == null ? 0 : un[0] * un[1]) + (th == null ? 0 : th[0] * th[1]);
+        int animTicks = (un == null ? 0 : registry.clipTicks(g.model(), "unpin")) + (th == null ? 0 : registry.clipTicks(g.model(), "throw"));
         int fuseTicks = (int) Math.round(g.fuse() * 20);
         final int fuse = g.cook() ? Math.max(1, fuseTicks - animTicks) : fuseTicks;
         p.playSound(p.getLocation(), "minecraft:item.flintandsteel.use", 0.8f, 1.6f);
@@ -256,6 +256,8 @@ public final class Grenades implements Listener {
         cancelClip(p);
         if (a == null) { if (then != null) then.run(); return; }
         int slot = p.getInventory().getHeldItemSlot();
+        int[] at = registry.frameStarts(g.model(), clip);
+        if (at == null) { at = new int[a[0]]; for (int i = 0; i < a[0]; i++) at[i] = i * a[1]; }
         List<BukkitTask> tasks = new ArrayList<>();
         for (int i = 1; i <= a[0]; i++) {
             final int frame = i;
@@ -263,14 +265,14 @@ public final class Grenades implements Listener {
                 ItemStack cur = p.getInventory().getItem(slot);
                 if (registry.grenadeOf(cur) != g || p.getInventory().getHeldItemSlot() != slot) { cancelClip(p); return; }
                 registry.setModel(cur, g.model() + "_" + clip + "_" + frame);
-            }, (long) (i - 1) * a[1]));
+            }, at[i - 1]));
         }
         tasks.add(plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
             clips.remove(p.getUniqueId());
             ItemStack cur = p.getInventory().getItem(slot);
             if (registry.grenadeOf(cur) == g) registry.setModel(cur, g.model());
             if (then != null) then.run();
-        }, (long) a[0] * a[1]));
+        }, Math.max(1, registry.clipTicks(g.model(), clip))));
         clips.put(p.getUniqueId(), tasks);
     }
 

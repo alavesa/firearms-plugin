@@ -94,7 +94,7 @@ public final class FirearmsCommand implements CommandExecutor, TabCompleter {
                     int[] a = plugin.registry.anim(model, clip);
                     if (a == null) continue;
                     any = true;
-                    sender.sendMessage(Component.text("  " + clip + ": " + a[0] + " frames x " + a[1] + " ticks" + (plugin.registry.animSounds(model, clip).isEmpty() ? "" : "  sounds " + plugin.registry.animSounds(model, clip)), NamedTextColor.GRAY));
+                    sender.sendMessage(Component.text("  " + clip + ": " + a[0] + " frames over " + plugin.registry.clipTicks(model, clip) + " ticks" + (plugin.registry.animSounds(model, clip).isEmpty() ? "" : "  sounds " + plugin.registry.animSounds(model, clip)), NamedTextColor.GRAY));
                 }
                 if (!any) sender.sendMessage(Component.text("  none - run /firearms pack and check its 'clips:' lines; the animation names must match anim.names", NamedTextColor.YELLOW));
                 return true;

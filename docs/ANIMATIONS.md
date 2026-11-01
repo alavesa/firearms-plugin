@@ -22,8 +22,12 @@ Optional files next to the model, all picked up automatically:
 
 - Cubes only. Meshes are skipped (the pack report tells you how many).
 - Keep the model inside Blockbench's Java range (-16..32 on every axis); bigger models are scaled down automatically and the scale is compensated in the display settings.
-- Rotate groups and cubes freely. Multiples of 90° are exact; any other angle is rounded to the nearest 22.5° step (a Java limit). The report lists every rounding.
-- Put the whole gun under one top-level group (e.g. `gun`). Its animation becomes the first-person display motion (exact, any angle). Sub-groups (`slide`, `mag`, `hammer`, `bolt`) are baked into the cubes.
+- Rotate groups and cubes freely - nothing is rounded. A cube whose total rotation is one axis at ±22.5° or ±45° is written as a plain Java element; every other rotation (two axes at once, 30°, 7°, 90°, 112.5° ...) is carried **exactly by the display transform** of a sub-model that holds every cube of that group sharing that rotation. The self-check in `/firearms pack` compares every cube corner with Blockbench and names any part that is off.
+- Blockbench 4.x and Blockbench 5 files both work (5.x keeps group pivots and rotations in a separate `groups` list; read since 0.21 - before that every group of a Blockbench 5 file lost its pivot and rotation, which broke the rifle model and the shotgun animations).
+- Put the whole gun under one top-level group (e.g. `gun`) and animate it for the gun's own motion. Groups that no animation moves are folded into the nearest animated group above them, so only the groups you actually animate cost anything in the pack (a 139-group rifle with 16 animated groups ends up with 16 bone parts plus one part per distinct free rotation).
+- Blockbench **scale** keyframes work: scale 0 hides a group (gun packs hide spare magazines and bullets with it).
+- An animation named `static_idle` (or `idle`, `static`; `anim.names.base`) is the **base pose**: it is never played as a clip but layered under the rest model and every frame - this is how gun packs made for other systems show/hide their attachment variants.
+- Gun packs converted from other systems carry every attachment at once (three magazines, two stocks, folded and raised sights). Leave the spare ones out per gun in `guns.yml`: `hide-groups: [mag_extended_1, mag_extended_2, stock_folded*, "sight_folded"]` (the pack report lists every group that holds cubes), and drop animation variants you do not need with `skip-animations: ["*_semi*"]`.
 - Blockbench **Display** settings (first-person right/left hand etc.) are used if the file has them. They can be overridden per gun in `guns.yml`:
 
 ```yaml
@@ -106,7 +110,9 @@ Hands with the player's skin work in grenade models exactly like in guns (see HA
 |---|---|
 | Every gun purple/black | A model name with a capital letter or space; fixed automatically since 0.2, but check the report. Or the players still have an old pack: re-upload. |
 | Gun purple only while firing | Pack older than the server's animation index: re-upload the pack after every `/firearms pack`. |
-| Parts floating / torn | Rotations rounded to 22.5° steps; see the report. Multiples of 90° are exact. |
+| Parts floating / torn | Read the `SELF-CHECK` and range warnings of `/firearms pack`; nothing is rounded any more (0.21). A Blockbench 5 file built with a plugin older than 0.21 lost every group pivot: rebuild. |
+| Three magazines / two stocks drawn at once | A gun pack with attachment variants: `hide-groups:` per gun in guns.yml (the report lists the group names). |
+| Pack is huge, build takes minutes | See *Pack size and frames* below: `anim.fps.inspect`, `skip-animations`, `hide-groups`, `anim.max-frames`. |
 | Animation barely visible | Too few frames or the motion sits on a sub-group instead of the top-level gun group. |
 | No sound | File missing in `models/sounds/`, or the effect name differs from the file name. |
 
@@ -149,3 +155,45 @@ config.yml lists the clips that get variants (default reload, inspect).
 Drop `models/sounds/<model>_gunshot.ogg`, `<model>_reload.ogg` and `<model>_inspect.ogg` next to the models:
 they are packed as `firearms:<model>_gunshot` etc. and used for that gun automatically unless guns.yml names
 another sound. Keyframe sounds in the Effects animator still work as before.
+
+## Pack size and frames (0.21) - and why there is no interpolation
+
+**Fact check.** Vanilla Minecraft cannot interpolate between two item models. An item model is a fixed set of
+cubes with a fixed display transform per context; the item model definition (`minecraft:select`, `composite`,
+`condition`) only chooses which fixed models to draw. The only client-side interpolation vanilla has is for
+*textures* (`.mcmeta` `interpolate: true` cross-fades texture frames) and for *display entities*
+(`item_display` / `block_display` with `interpolation_duration`, which blend translation, rotation and scale
+over a number of ticks). Neither applies to the item in a player's hand, so a first-person animation made of
+item models is always a sequence of baked frames - every vanilla-compatible gun system (OBJMC/viewmodel data
+packs, TaCZ-style packs converted to custom_model_data) does exactly that. Display entities could animate a gun
+with real interpolation, but they are world entities: they clip into walls near the camera, scale with the FOV
+setting, show up floating in F5 for everyone, cannot use the player's skin for hands, and need a stream of
+packets per bone per player. That is a different renderer, not a smaller pack, so the plugin stays with item
+models and makes the frames cheap instead.
+
+**How frames are stored now.** A frame is a `minecraft:composite` list of parts; a part is a tiny wrapper file
+(`{"parent": geometry, "display": {...}}`). Since 0.21:
+
+- the geometry of each part is written once, and every *distinct pose* of a part is one wrapper file shared by
+  every frame of every clip that shows the part like that;
+- only `firstperson_righthand` is written into frame wrappers (the client uses it for the left hand too);
+- a sampled frame identical to the previous one is not written - the previous frame holds, and
+  `models/anim-index.yml` says when each written frame starts (`frame-at`), which the plugin follows;
+- groups no animation moves are folded into the animated group above them, so the part count is the number of
+  animated groups plus one per distinct free cube rotation, not the number of groups;
+- clips are sampled at `anim.fps` (default 20 = one per server tick, the most a client can be shown; inspect
+  clips 10), capped by `anim.max-frames` (200); animations that map to no clip the plugin plays (`switch_auto`,
+  `static_semi`...) are not baked unless `anim.bake-unknown: true`.
+
+The rifle and shotgun packs sent by the team (TaCZ exports: 1004 and 764 cubes, 139 and 87 groups, 17 and 31
+animations) measured on Paper 26.3:
+
+| | files | zip | raw | build |
+| --- | --- | --- | --- | --- |
+| 0.20 | 444 000 | 227 MB | 495 MB | 3.5 min |
+| 0.21, stock settings | 131 000 | 42 MB | 42 MB | 5 s |
+| 0.21 + `skip-animations` (`*_xmag`, `*_semi*`) + `hide-groups` (spare mags, folded sights, second handguard/adapter) | 66 000 | 21 MB | 21 MB | 4 s |
+
+Most of a 0.21 pack is zip bookkeeping for the wrapper files (about 190 bytes per file for 130 bytes of
+content), so the levers are the number of frames (fps, skipped animations, `anim.max-frames`) and of parts
+(hidden groups). The pack report's `build time` and `zip:` lines show where the time goes.

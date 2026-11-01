@@ -37,6 +37,10 @@ public final class Registry {
     private final Map<String, List<int[]>> skinClassic = new LinkedHashMap<>(), skinSlim = new LinkedHashMap<>();
     /** model -> clip -> [frames, frameTicks], written by the pack generator (models/anim-index.yml). */
     private final Map<String, Map<String, int[]>> anims = new LinkedHashMap<>();
+    /** model -> clip -> tick each written frame starts at (frames that did not change were not written and the previous one holds). */
+    private final Map<String, Map<String, int[]>> frameStarts = new LinkedHashMap<>();
+    /** model -> clip -> length in ticks. */
+    private final Map<String, Map<String, Integer>> clipLengths = new LinkedHashMap<>();
     /** model -> clip -> ["tick:sound", ...] from the .bbmodel sound keyframes. */
     private final Map<String, Map<String, List<String>>> animSounds = new LinkedHashMap<>();
     /** model -> clip key -> the animation's own name in the .bbmodel (for the empty / full / tactical keywords). */
@@ -64,7 +68,7 @@ public final class Registry {
     // ------------------------------------------------------------------ loading
 
     public void load() {
-        guns.clear(); mags.clear(); ammo.clear(); anims.clear(); vests.clear(); animSounds.clear(); grenades.clear(); clipNames.clear(); skinClassic.clear(); skinSlim.clear();
+        guns.clear(); mags.clear(); ammo.clear(); anims.clear(); frameStarts.clear(); clipLengths.clear(); vests.clear(); animSounds.clear(); grenades.clear(); clipNames.clear(); skinClassic.clear(); skinSlim.clear();
         File grf = new File(plugin.getDataFolder(), "grenades.yml");
         if (!grf.exists()) plugin.saveResource("grenades.yml", false);
         ConfigurationSection grs = YamlConfiguration.loadConfiguration(grf).getConfigurationSection("grenades");
@@ -147,7 +151,9 @@ public final class Registry {
                 s.getConfigurationSection("anim-names"),
                 s.getConfigurationSection("anim"),
                 s.getString("reload-sound", ""), s.getString("equip-sound", ""), s.getString("empty-sound", ""),
-                s.getDouble("equip-seconds", 0)));
+                s.getDouble("equip-seconds", 0),
+                s.getStringList("hide-groups"),
+                s.getStringList("skip-animations")));
         }
         // Animation frame index written by the pack generator.
         File ai = new File(new File(plugin.getDataFolder(), "models"), "anim-index.yml");
@@ -157,16 +163,22 @@ public final class Registry {
                 ConfigurationSection s = a.getConfigurationSection(model);
                 if (s == null) continue;
                 Map<String, int[]> clips = new LinkedHashMap<>();
+                Map<String, int[]> starts = new LinkedHashMap<>();
+                Map<String, Integer> lengths = new LinkedHashMap<>();
                 Map<String, List<String>> snd = new LinkedHashMap<>();
                 Map<String, String> names = new LinkedHashMap<>();
                 if (s.contains("skin-classic")) { skinClassic.put(model, pixels(s.getString("skin-classic", ""))); skinSlim.put(model, pixels(s.getString("skin-slim", ""))); }
                 for (String clip : s.getKeys(false)) {
                     if (clip.startsWith("skin-")) continue;
                     clips.put(clip, new int[]{ s.getInt(clip + ".frames", 0), Math.max(1, s.getInt(clip + ".frame-ticks", 1)) });
+                    if (s.contains(clip + ".frame-at")) { List<Integer> at = s.getIntegerList(clip + ".frame-at"); int[] fa = new int[at.size()]; for (int i = 0; i < fa.length; i++) fa[i] = at.get(i); starts.put(clip, fa); }
+                    if (s.contains(clip + ".ticks")) lengths.put(clip, s.getInt(clip + ".ticks"));
                     if (s.contains(clip + ".sounds")) snd.put(clip, s.getStringList(clip + ".sounds"));
                     if (s.contains(clip + ".name")) names.put(clip, s.getString(clip + ".name"));
                 }
                 anims.put(model, clips);
+                frameStarts.put(model, starts);
+                clipLengths.put(model, lengths);
                 animSounds.put(model, snd);
                 clipNames.put(model, names);
             }
@@ -323,7 +335,19 @@ public final class Registry {
     }
 
     /** Total length of a baked clip in ticks, or -1. */
-    public int clipTicks(String model, String clip) { int[] a = anim(model, clip); return a == null ? -1 : a[0] * a[1]; }
+    public int clipTicks(String model, String clip) {
+        int[] a = anim(model, clip);
+        if (a == null) return -1;
+        Integer len = clipLengths.getOrDefault(model, Map.of()).get(clip);
+        return len != null && len > 0 ? len : a[0] * a[1];
+    }
+
+    /** The tick each frame of a clip starts at (frame 1 at index 0), or null for evenly spaced frames (older index). */
+    public int[] frameStarts(String model, String clip) {
+        int[] a = frameStarts.getOrDefault(model, Map.of()).get(clip);
+        int[] n = anim(model, clip);
+        return a != null && n != null && a.length == n[0] ? a : null;
+    }
 
     /** A sound dropped next to the model: models/sounds/<model>_<suffix>.ogg -> "firearms:<model>_<suffix>", or null. */
     public String modelSound(String model, String suffix) {

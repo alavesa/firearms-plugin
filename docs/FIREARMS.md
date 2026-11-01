@@ -65,9 +65,19 @@ The file's header comments document every key.
 
 ## Models and animations
 
-A gun model is a Blockbench file with bones. Each bone becomes its own sub-model so animations keep exact
-rotations (no 22.5-degree rounding), every animation is baked into frames, and the pack selects the frames only
-for first person: third person, the ground, item frames and the GUI show the rest pose without hands or flash.
+A gun model is a Blockbench file (4.x or 5) with groups. Every animated group becomes its own sub-model whose
+display transform carries its exact pose per frame, cubes rotated by angles a Java element cannot hold get their
+rotation from a display transform too (nothing is rounded), every animation is baked into frames, and the pack
+selects the frames only for first person: third person, the ground, item frames and the GUI show the rest pose
+without hands or flash. Vanilla cannot interpolate between item models, so frames are the only way; 0.21 stores
+them as one file per distinct part pose, holds unchanged frames and samples inspect clips at 10 fps
+(`anim.fps`), which brought the team's rifle+shotgun pack from 227 MB to 42 MB as is and 21 MB with the per-gun skip and hide
+lists below (ANIMATIONS.md explains).
+
+Gun packs converted from other systems (TaCZ and the like) carry every attachment variant and every fire-mode
+variant of each animation. Per gun in guns.yml: `hide-groups: [mag_extended_1, stock_folded*]` leaves groups
+out (the pack report lists them), `skip-animations: ["*_semi*"]` leaves animations out, and an animation named
+`static_idle` is used as the base pose under everything (scale 0 hides a group).
 
 Animation names map to clips by keywords (`anim.names` in config.yml, per gun `anim-names` in guns.yml):
 
@@ -108,4 +118,7 @@ the thing to send along with the model file.
 | a frame is purple while firing | the pack players hold is older than the server's animation index; run `/firearms pack` and let it re-send |
 | the server pauses after `/firearms pack` | RP Engine rebuilding its pack on the main thread; see RPENGINE.md (batched reload) |
 | a part floats or is twisted | run `/firearms pack`, read the self-check and range warnings, send the named part and the file |
+| a Blockbench 5 model is scrambled, its animations swing wildly | plugin older than 0.21 ignored the `groups` list of Blockbench 5 files (every pivot became 0,0,0); update and rebuild |
+| the pack is hundreds of MB or the build takes minutes | `anim.fps.inspect: 10` (default), per gun `skip-animations` / `hide-groups`, `anim.max-frames`; see ANIMATIONS.md *Pack size and frames* |
+| three magazines or two stocks show at once | an attachment pack: `hide-groups:` per gun in guns.yml |
 | players do not get the pack | `/firearms host` shows the delivery mode and the last problem |
