@@ -52,6 +52,7 @@ public final class FirearmsPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(grenades, this);
         getServer().getScheduler().runTaskTimer(this, grenades::tick, 1L, 1L);
         getServer().getScheduler().runTaskTimer(this, hold::tick, 1L, 1L);
+        getServer().getScheduler().runTaskTimer(this, controller::tick, 1L, 1L);
         getServer().getScheduler().runTaskTimer(this, hold::poll, 20L, 5L);
         getServer().getScheduler().runTaskTimer(this, ballistics::tick, 1L, 1L);
         FirearmsCommand cmd = new FirearmsCommand(this);

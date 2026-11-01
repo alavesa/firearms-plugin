@@ -39,6 +39,8 @@ public final class Registry {
     private final Map<String, Map<String, int[]>> anims = new LinkedHashMap<>();
     /** model -> clip -> ["tick:sound", ...] from the .bbmodel sound keyframes. */
     private final Map<String, Map<String, List<String>>> animSounds = new LinkedHashMap<>();
+    /** model -> clip key -> the animation's own name in the .bbmodel (for the empty / full / tactical keywords). */
+    private final Map<String, Map<String, String>> clipNames = new LinkedHashMap<>();
 
     final NamespacedKey gunKey, magKey, ammoKey, roundsKey, uidKey, craterKey, vestKey, grenadeKey;
 
@@ -62,7 +64,7 @@ public final class Registry {
     // ------------------------------------------------------------------ loading
 
     public void load() {
-        guns.clear(); mags.clear(); ammo.clear(); anims.clear(); vests.clear(); animSounds.clear(); grenades.clear(); skinClassic.clear(); skinSlim.clear();
+        guns.clear(); mags.clear(); ammo.clear(); anims.clear(); vests.clear(); animSounds.clear(); grenades.clear(); clipNames.clear(); skinClassic.clear(); skinSlim.clear();
         File grf = new File(plugin.getDataFolder(), "grenades.yml");
         if (!grf.exists()) plugin.saveResource("grenades.yml", false);
         ConfigurationSection grs = YamlConfiguration.loadConfiguration(grf).getConfigurationSection("grenades");
@@ -156,14 +158,17 @@ public final class Registry {
                 if (s == null) continue;
                 Map<String, int[]> clips = new LinkedHashMap<>();
                 Map<String, List<String>> snd = new LinkedHashMap<>();
+                Map<String, String> names = new LinkedHashMap<>();
                 if (s.contains("skin-classic")) { skinClassic.put(model, pixels(s.getString("skin-classic", ""))); skinSlim.put(model, pixels(s.getString("skin-slim", ""))); }
                 for (String clip : s.getKeys(false)) {
                     if (clip.startsWith("skin-")) continue;
                     clips.put(clip, new int[]{ s.getInt(clip + ".frames", 0), Math.max(1, s.getInt(clip + ".frame-ticks", 1)) });
                     if (s.contains(clip + ".sounds")) snd.put(clip, s.getStringList(clip + ".sounds"));
+                    if (s.contains(clip + ".name")) names.put(clip, s.getString(clip + ".name"));
                 }
                 anims.put(model, clips);
                 animSounds.put(model, snd);
+                clipNames.put(model, names);
             }
         }
     }
@@ -296,14 +301,34 @@ public final class Registry {
     /** Is this gun AUTO? The fire mode is the gun's own (guns.yml fire-mode); right-click aims since 0.19. */
     public boolean isAuto(ItemStack it, GunType gun) { return gun.auto(); }
 
-    /** One of a clip's random variants ("reload", "reload_2", ...) that exists for this model; the clip itself if none. */
-    public String pickVariant(String model, String clip) {
+    /** The variants of a clip baked for this model (reload, reload_2 ...), with their names and lengths. */
+    public List<VariantPicker.Variant> variants(String model, String clip) {
         Map<String, int[]> c = anims.get(model);
-        if (c == null) return clip;
-        List<String> have = new ArrayList<>();
-        for (String k : c.keySet()) if (k.equals(clip) || k.matches(java.util.regex.Pattern.quote(clip) + "_\\d+")) if (c.get(k)[0] > 0) have.add(k);
-        if (have.isEmpty()) return clip;
-        return have.get(java.util.concurrent.ThreadLocalRandom.current().nextInt(have.size()));
+        List<VariantPicker.Variant> out = new ArrayList<>();
+        if (c == null) return out;
+        Map<String, String> names = clipNames.getOrDefault(model, Map.of());
+        for (var e : c.entrySet()) {
+            String k = e.getKey();
+            if (!(k.equals(clip) || k.matches(java.util.regex.Pattern.quote(clip) + "_\\d+")) || e.getValue()[0] <= 0) continue;
+            out.add(new VariantPicker.Variant(k, names.getOrDefault(k, k), e.getValue()[0] * e.getValue()[1]));
+        }
+        return out;
+    }
+
+    /** The clip variant to play now: by the magazine (empty / full-tactical keywords) and the player's health
+     *  (full health = the shortest, low health = the longest); the clip itself when it has no variants. */
+    public String pickVariant(String model, String clip, boolean magazineEmpty, double health) {
+        VariantPicker.Variant v = VariantPicker.pick(variants(model, clip), magazineEmpty, health);
+        return v == null ? clip : v.key();
+    }
+
+    /** Total length of a baked clip in ticks, or -1. */
+    public int clipTicks(String model, String clip) { int[] a = anim(model, clip); return a == null ? -1 : a[0] * a[1]; }
+
+    /** A sound dropped next to the model: models/sounds/<model>_<suffix>.ogg -> "firearms:<model>_<suffix>", or null. */
+    public String modelSound(String model, String suffix) {
+        File f = new File(new File(new File(plugin.getDataFolder(), "models"), "sounds"), model + "_" + suffix + ".ogg");
+        return f.exists() ? "firearms:" + model + "_" + suffix : null;
     }
 
     /** Every clip key the pack baked for a model (fire, reload, reload_2, aim ...). */

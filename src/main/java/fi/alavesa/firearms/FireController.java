@@ -53,8 +53,8 @@ public final class FireController implements Listener {
     private final Map<UUID, List<BukkitTask>> animTasks = new ConcurrentHashMap<>();
     private final Map<UUID, Long> lastShotTick = new ConcurrentHashMap<>();
     private final Map<UUID, Integer> drawUntil = new ConcurrentHashMap<>();
-    private final Map<UUID, Long> aimToggleAt = new ConcurrentHashMap<>();    // right-click fires twice (air + block): one toggle per press
-    private final Set<UUID> aiming = ConcurrentHashMap.newKeySet();          // players aiming down the sight
+    private final Map<UUID, Integer> aimSeen = new ConcurrentHashMap<>();     // last server tick a right-click arrived (the client repeats it every ~4 ticks while held)
+    private final Set<UUID> aiming = ConcurrentHashMap.newKeySet();          // players holding the sight
     private final NamespacedKey aimKey;
 
     public FireController(FirearmsPlugin plugin, Registry registry, Ballistics ballistics, Casings casings) {
@@ -97,9 +97,10 @@ public final class FireController implements Listener {
                 trigger(p, gun, item);
             } else if (right) {
                 event.setCancelled(true);
-                long now = System.currentTimeMillis();
-                Long lastT = aimToggleAt.put(p.getUniqueId(), now);
-                if (lastT == null || now - lastT > plugin.getConfig().getLong("aim.toggle-debounce-ms", 300)) toggleAim(p, gun, item);
+                // HOLD to aim: the client re-sends the right-click every ~4 ticks while the button is down (the
+                // charged crossbow never starts a continuous use), so "still held" = a click within the last few ticks
+                aimSeen.put(p.getUniqueId(), plugin.getServer().getCurrentTick());
+                if (!aiming.contains(p.getUniqueId())) enterAim(p, gun, item);
             }
             return;
         }
@@ -130,7 +131,8 @@ public final class FireController implements Listener {
         nextShotAt.put(id, now + gun.shotIntervalMs());
         lastShotTick.put(id, (long) plugin.getServer().getCurrentTick());
         registry.setRounds(item, rounds - 1, capacity(item, gun));
-        p.getWorld().playSound(p.getLocation(), gun.sound(), 1.2f, gun.pitch());
+        String shot = gun.sound() == null || gun.sound().isEmpty() || gun.sound().startsWith("minecraft:") ? registry.modelSound(gun.model(), "gunshot") : null;
+        p.getWorld().playSound(p.getLocation(), shot != null ? shot : gun.sound(), 1.2f, gun.pitch());
         Vector aim = p.getEyeLocation().getDirection();
         for (int i = 0; i < gun.pellets(); i++) ballistics.fire(p, gun, spread(p, gun), 1.0);
         if (registry.casingModel(gun) != null) casings.eject(p, gun, aim);
@@ -195,7 +197,11 @@ public final class FireController implements Listener {
         if (du != null && plugin.getServer().getCurrentTick() < du) return;   // still drawing: no reload, no inspect
         boolean started = gun.pumpAction() || !gun.usesMag() ? startPumpReload(p, gun, item) : startMagReload(p, gun, item);
         // Second use of the reload key: full gun or nothing to load -> the "inspect" animation.
-        if (!started && !reloadingMag.contains(p.getUniqueId()) && !reloadingPump.contains(p.getUniqueId())) playClip(p, gun, item, "inspect");
+        if (!started && !reloadingMag.contains(p.getUniqueId()) && !reloadingPump.contains(p.getUniqueId())) {
+            playClip(p, gun, item, registry.pickVariant(gun.model(), "inspect", registry.rounds(item) <= 0, healthFraction(p)));
+            String snd = registry.modelSound(gun.model(), "inspect");
+            if (snd != null) p.getWorld().playSound(p.getLocation(), snd, 1f, 1f);
+        }
     }
 
     private List<String> magIds(GunType gun) {
@@ -226,10 +232,14 @@ public final class FireController implements Listener {
         final String uid = uid(item);
         reloadingMag.add(id);
         boolean customReload = gun.reloadSound() != null && !gun.reloadSound().isEmpty();
-        p.getWorld().playSound(p.getLocation(), customReload ? gun.reloadSound() : "minecraft:item.crossbow.loading_start", 1f, customReload ? 1f : 1.2f);
+        String reloadSnd = customReload ? gun.reloadSound() : registry.modelSound(gun.model(), "reload");
+        p.getWorld().playSound(p.getLocation(), reloadSnd != null ? reloadSnd : "minecraft:item.crossbow.loading_start", 1f, reloadSnd != null ? 1f : 1.2f);
         p.sendActionBar(Component.text("Reloading...", NamedTextColor.YELLOW));
-        playClip(p, gun, item, registry.pickVariant(gun.model(), "reload"));
+        String variant = registry.pickVariant(gun.model(), "reload", current <= 0, healthFraction(p));
+        playClip(p, gun, item, variant);
         long ticks = Math.max(1, Math.round(gun.reloadSeconds() * 20));
+        int clipTicks = registry.clipTicks(gun.model(), variant);
+        if (clipTicks > 0 && plugin.getConfig().getBoolean("reload.use-clip-length", true)) ticks = clipTicks;   // the reload takes as long as its animation
         reloadTask.put(id, plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
             reloadingMag.remove(id);
             reloadTask.remove(id);
@@ -426,7 +436,7 @@ public final class FireController implements Listener {
         exitAim(event.getPlayer(), null, null, false);
         cancelClip(event.getPlayer());
         UUID id = event.getPlayer().getUniqueId();
-        nextShotAt.remove(id); lastSwing.remove(id); lastShotTick.remove(id); drawUntil.remove(id); aimToggleAt.remove(id);
+        nextShotAt.remove(id); lastSwing.remove(id); lastShotTick.remove(id); drawUntil.remove(id); aimSeen.remove(id);
     }
 
     // ------------------------------------------------------------------ aiming down the sight
@@ -434,12 +444,29 @@ public final class FireController implements Listener {
     /** Sneaking counts as aiming too (config aim.sneak-aims), as it always did. */
     public boolean isAiming(Player p) { return aiming.contains(p.getUniqueId()) || (plugin.getConfig().getBoolean("aim.sneak-aims", true) && p.isSneaking()); }
 
-    private void toggleAim(Player p, GunType gun, ItemStack item) {
-        if (aiming.contains(p.getUniqueId())) exitAim(p, gun, item, true); else enterAim(p, gun, item);
+    private static double healthFraction(Player p) {
+        var max = p.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH);
+        double m = max == null ? 20.0 : max.getValue();
+        return m <= 0 ? 1.0 : Math.max(0, Math.min(1, p.getHealth() / m));
     }
 
-    /** Right-click: aim down the sight - the aim_in clip once, then the aim clip looping; the FOV zooms in through a
-     *  movement-speed modifier (the client scales its field of view with that attribute), which also slows walking. */
+    /** Every tick: release the sight when the right-click stream stopped; keep the client-side aim pose fresh. */
+    public void tick() {
+        int now = plugin.getServer().getCurrentTick();
+        int timeout = plugin.getConfig().getInt("aim.hold-timeout-ticks", 7);
+        for (UUID id : new ArrayList<>(aiming)) {
+            Player p = plugin.getServer().getPlayer(id);
+            if (p == null || !p.isOnline()) { aiming.remove(id); aimSeen.remove(id); continue; }
+            Integer seen = aimSeen.get(id);
+            ItemStack item = p.getInventory().getItemInMainHand();
+            GunType gun = registry.gunOf(item);
+            if (gun == null || seen == null || now - seen > timeout) { exitAim(p, gun, item, true); continue; }
+            if (now % 5 == 0 && !animTasks.containsKey(id)) sendAimView(p, gun, item);   // a server inventory update may have overwritten it
+        }
+    }
+
+    /** Right-click held: the sight comes up - the zoom is a movement-speed modifier (the client scales its field
+     *  of view with that attribute), the pose is the gun's aim model shown CLIENT-SIDE by a slot packet. */
     private void enterAim(Player p, GunType gun, ItemStack item) {
         UUID id = p.getUniqueId();
         Integer du = drawUntil.get(id);
@@ -452,28 +479,27 @@ public final class FireController implements Listener {
             attr.addTransientModifier(new org.bukkit.attribute.AttributeModifier(aimKey, mult - 1.0, org.bukkit.attribute.AttributeModifier.Operation.MULTIPLY_SCALAR_1));
         }
         p.playSound(p.getLocation(), plugin.getConfig().getString("aim.sound-in", "minecraft:item.spyglass.use"), 0.6f, 1.3f);
-        if (registry.anim(gun.model(), "aim_in") != null) playClip(p, gun, item, "aim_in", 0, () -> loopAim(p, gun, item));
-        else loopAim(p, gun, item);
+        if (!animTasks.containsKey(id)) sendAimView(p, gun, item);
     }
 
-    /** The continuous aiming pose: the aim clip restarted every time it ends, as long as the player still aims. */
-    private void loopAim(Player p, GunType gun, ItemStack item) {
-        if (!aiming.contains(p.getUniqueId()) || !p.isOnline()) return;
-        if (registry.anim(gun.model(), "aim") == null) return;   // no aim clip: the rest pose is the aiming pose
-        playClip(p, gun, item, "aim", 0, () -> loopAim(p, gun, item));
+    /** The aiming pose: the same gun item with the model "<model>_aim_1" (one baked pose, no frames), shown only
+     *  to this client; the server's inventory keeps the rest model. Nothing happens for a gun without an aim clip. */
+    private void sendAimView(Player p, GunType gun, ItemStack item) {
+        if (registry.anim(gun.model(), "aim") == null || !NmsAimView.available()) return;
+        ItemStack shown = item.clone();
+        registry.setModel(shown, gun.model() + "_aim_1");
+        NmsAimView.sendSlot(p, p.getInventory().getHeldItemSlot(), shown);
     }
 
-    /** Leave the sight: the aim_out clip once, zoom and slow-down removed. gun/item may be null (slot change, quit). */
-    private void exitAim(Player p, GunType gun, ItemStack item, boolean animate) {
+    /** Leave the sight: zoom and slow-down removed, the real item shown again. gun/item may be null (slot change, quit). */
+    private void exitAim(Player p, GunType gun, ItemStack item, boolean sound) {
         UUID id = p.getUniqueId();
         if (!aiming.remove(id)) return;
+        aimSeen.remove(id);
         var attr = p.getAttribute(org.bukkit.attribute.Attribute.MOVEMENT_SPEED);
         if (attr != null && attr.getModifier(aimKey) != null) attr.removeModifier(aimKey);
-        cancelClip(p);
-        if (animate && gun != null && item != null) {
-            p.playSound(p.getLocation(), plugin.getConfig().getString("aim.sound-out", "minecraft:item.spyglass.stop_using"), 0.6f, 1.3f);
-            if (registry.anim(gun.model(), "aim_out") != null) playClip(p, gun, item, "aim_out");
-        }
+        p.updateInventory();   // drops the client-side aim pose
+        if (sound && gun != null) p.playSound(p.getLocation(), plugin.getConfig().getString("aim.sound-out", "minecraft:item.spyglass.stop_using"), 0.6f, 1.3f);
     }
 
     // ------------------------------------------------------------------ first-person clips
@@ -516,8 +542,8 @@ public final class FireController implements Listener {
             ItemStack cur = p.getInventory().getItem(slot);
             if (!uid.equals(uid(cur))) return;
             if (then != null) { then.run(); return; }
-            if (aiming.contains(p.getUniqueId()) && !clip.startsWith("aim")) { loopAim(p, gun, cur); return; }   // fire/reload while aiming: back to the sight
             registry.setModel(cur, gun.model());
+            if (aiming.contains(p.getUniqueId())) sendAimView(p, gun, cur);   // fire/reload while aiming: back onto the sight
         }, holdUntil));
         animTasks.put(p.getUniqueId(), tasks);
     }
@@ -561,5 +587,5 @@ public final class FireController implements Listener {
         for (Player p : plugin.getServer().getOnlinePlayers()) { cancelReload(p); cancelClip(p); }
     }
 
-    static List<String> clips() { return Arrays.asList("fire", "reload", "equip", "pump", "inspect", "aim_in", "aim", "aim_out"); }
+    static List<String> clips() { return Arrays.asList("fire", "reload", "equip", "pump", "inspect", "aim"); }
 }

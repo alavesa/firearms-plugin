@@ -125,19 +125,19 @@ public final class NmsRecoil {
         }
     }
 
-    private static Object getHandle(Player p) throws Exception {
+    static Object getHandle(Player p) throws Exception {
         if (getHandle == null) getHandle = p.getClass().getMethod("getHandle");
         return getHandle.invoke(p);
     }
 
-    private static Object connection(Object handle) throws Exception {
+    static Object connection(Object handle) throws Exception {
         if (connectionField == null) {
             connectionField = Class.forName("net.minecraft.server.level.ServerPlayer").getField("connection");
         }
         return connectionField.get(handle);
     }
 
-    private static void send(Object connection, Object packet) throws Exception {
+    static void send(Object connection, Object packet) throws Exception {
         if (sendMethod == null) {
             Class<?> base = Class.forName("net.minecraft.network.protocol.Packet");
             for (Class<?> c = connection.getClass(); c != null && sendMethod == null; c = c.getSuperclass()) {

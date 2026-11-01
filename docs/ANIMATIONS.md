@@ -119,13 +119,33 @@ one rigid object). The items file selects those frame parts only for `firstperso
 modelled in the .bbmodel (see HANDS.md) are therefore invisible to other players. `third-person.animate: true` in
 config.yml shows the frames in third person too.
 
-## Aiming clips and reload variants (0.19)
+## Aiming (0.20)
 
-Right-click aims down the sight. Three clips drive it: `aim_in` (plays once when the sight comes up), `aim` (loops
-for as long as the player aims - a one-frame clip is simply the aiming pose) and `aim_out` (once, on the way back).
-Keywords: aim_in / ads_in / scope_in, aim / ads / scope / aiming / sight, aim_out / ads_out / scope_out. Firing or
-reloading while aiming plays that clip and returns to the aim loop.
+Hold right-click to aim. The gun's **aim pose** is ONE model baked from the end of the `.bbmodel` animation named
+`aim` (keywords aim / ads / scope / aiming / sight): while the player holds right-click the plugin shows that model
+to their client only, through a hotbar slot packet, and zooms through a movement-speed modifier. No frames are
+baked for aiming; animations named `aim_in` / `aim_out` are recognised and skipped. Firing or reloading while aiming
+plays that clip from the rest pose (the gun comes off the centre, as the clip is modelled) and snaps back onto the
+sight when it ends. A gun with no `aim` animation keeps its rest pose while aiming (zoom only).
 
-Reload animations can come in several versions: every animation whose name matches the reload keywords is baked
-(`reload`, `reload_2`, `reload_3` ... in name order) and one is picked at random each reload. Other clips take the
-best-matching name only; add a clip to `anim.random-variants` in config.yml to give it variants too.
+## Reload and inspect variants (0.20)
+
+Every animation matching the reload keywords is baked (`reload`, `reload_2`, `reload_3` ... in score and name
+order); the same for inspect. Which one plays is chosen by the magazine and the player's health:
+
+| Name contains | Plays when |
+| --- | --- |
+| `empty` | the magazine is empty |
+| `full` or `tactical` | the magazine still holds rounds |
+| none of those | either case |
+
+Among the fitting clips the **shortest** plays at full health and the **longest** at low health; with
+`reload.use-clip-length: true` (default) the reload takes exactly as long as the clip that plays, so a fast
+tactical reload really is faster. Other clips keep the best-matching animation only; `anim.random-variants` in
+config.yml lists the clips that get variants (default reload, inspect).
+
+## Sounds named after the model
+
+Drop `models/sounds/<model>_gunshot.ogg`, `<model>_reload.ogg` and `<model>_inspect.ogg` next to the models:
+they are packed as `firearms:<model>_gunshot` etc. and used for that gun automatically unless guns.yml names
+another sound. Keyframe sounds in the Effects animator still work as before.

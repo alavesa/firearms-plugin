@@ -89,7 +89,7 @@ public final class FirearmsCommand implements CommandExecutor, TabCompleter {
                 sender.sendMessage(Component.text("Clips the plugin knows for '" + model + "' (from models/anim-index.yml):", NamedTextColor.GOLD));
                 boolean any = false;
                 List<String> keys = new ArrayList<>(plugin.registry.clipKeys(model));
-                for (String clip : new String[]{"fire", "reload", "equip", "pump", "inspect", "aim_in", "aim", "aim_out", "unpin", "throw"}) if (!keys.contains(clip)) keys.add(clip);
+                for (String clip : new String[]{"fire", "reload", "equip", "pump", "inspect", "aim", "unpin", "throw"}) if (!keys.contains(clip)) keys.add(clip);
                 for (String clip : keys) {
                     int[] a = plugin.registry.anim(model, clip);
                     if (a == null) continue;

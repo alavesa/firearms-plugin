@@ -57,6 +57,7 @@ public final class PackGenerator {
     private final Map<String, byte[]> files = new LinkedHashMap<>();       // zip path -> bytes
     private final Map<String, String> cmdToModel = new LinkedHashMap<>();  // custom_model_data -> model path
     private final Map<String, Map<String, int[]>> animIndex = new LinkedHashMap<>();
+    private final Map<String, Map<String, String>> clipNameIndex = new LinkedHashMap<>();   // model -> clip key -> animation name
     private final Map<String, Map<String, List<String>>> clipSoundIndex = new LinkedHashMap<>();
     private int frames = 0, placeholders = 0, models = 0;
     private final Map<String, String> vestCmdToModel = new LinkedHashMap<>();   // vests live on the armour item
@@ -179,6 +180,8 @@ public final class PackGenerator {
         for (var m : animIndex.entrySet()) for (var c : m.getValue().entrySet()) {
             idx.set(m.getKey() + "." + c.getKey() + ".frames", c.getValue()[0]);
             idx.set(m.getKey() + "." + c.getKey() + ".frame-ticks", c.getValue()[1]);
+            String cn = clipNameIndex.getOrDefault(m.getKey(), Map.of()).get(c.getKey());
+            if (cn != null) idx.set(m.getKey() + "." + c.getKey() + ".name", cn);
             Map<String, List<String>> sm = clipSoundIndex.get(m.getKey());
             if (sm != null && sm.containsKey(c.getKey())) idx.set(m.getKey() + "." + c.getKey() + ".sounds", sm.get(c.getKey()));
         }
@@ -1064,6 +1067,8 @@ public final class PackGenerator {
             clip.length = num(a.get("length"), 0);
             String key = picked.getKey();
             if (clips.containsKey(key)) { warnings.add(name + ": animation '" + clip.name + "' ignored - '" + key + "' already has one"); continue; }
+            if (key.equals("aim_in") || key.equals("aim_out")) { report.add(name + ": animation '" + clip.name + "' not baked - aiming is one pose model shown client-side, not frames (only the 'aim' clip's end pose is used)"); continue; }
+            clipNameIndex.computeIfAbsent(name, x -> new LinkedHashMap<>()).put(key, clip.name);
             List<String> clipSounds = new ArrayList<>();
             if (a.has("animators")) for (var en : a.getAsJsonObject("animators").entrySet()) {
                 JsonObject an = en.getValue().getAsJsonObject();
@@ -1106,6 +1111,7 @@ public final class PackGenerator {
             if (n <= 0 && a.has("snapping")) { double snap = num(a.get("snapping"), 0); if (snap > 0) n = (int) Math.ceil(clip.length * snap); }
             if (n <= 0) n = (int) Math.ceil(clip.length * 20.0 / frameTicks);
             if (n > maxFrames) warnings.add(name + " clip '" + key + "': " + n + " frames capped at " + maxFrames + " (the clip is sampled coarser; raise anim.max-frames or the gun's anim.max-frames)");
+            if (key.equals("aim")) n = 1;   // the aiming pose: ONE model (the clip's end), shown by a client-side slot packet while aiming
             n = Math.max(1, Math.min(maxFrames, n));
             int clipTicks = Math.max(1, (int) Math.round(clip.length * 20.0 / n));
             for (int i = 1; i <= n; i++) {
@@ -1143,7 +1149,7 @@ public final class PackGenerator {
      *  and the plugin picks one at random each time. */
     private List<Map.Entry<String, JsonElement>> pickAnimations(String model, JsonArray anims) {
         java.util.Set<String> variantClips = new java.util.HashSet<>(lower(plugin.getConfig().getStringList("anim.random-variants")));
-        if (!plugin.getConfig().contains("anim.random-variants")) variantClips.add("reload");
+        variantClips.add("reload"); variantClips.add("inspect");   // always: the magazine / health rules depend on them
         Map<String, List<JsonElement>> byKey = new LinkedHashMap<>();
         Map<JsonElement, Integer> scores = new HashMap<>();
         for (JsonElement ae : anims) {
@@ -1751,6 +1757,32 @@ public final class PackGenerator {
 
         int partCount() { return parts.size(); }
 
+        /** Self-check: every cube corner, placed by the EMITTED representation (fitted bone-local geometry + the
+         *  part's display transform), must land where Blockbench puts it (bone chain + the cube's own rotation).
+         *  A part that is off is reported by name - no guessing about which part "did not translate". */
+        private void verifyPart(Part part, double[][] M, double[] Pw, double[][] Rw) {
+            double worst = 0; String worstCube = null;
+            for (Cube c : part.cubes) {
+                boolean solo = part.soloCube == c;
+                CubeMath.Element el = solo ? CubeMath.plain() : CubeMath.element(c.rotation);
+                double[][] Re = CubeMath.rot3(c.rotation);
+                double[][] W = solo ? M : world(part.bone, null, 0, new HashMap<>());
+                for (int corner = 0; corner < 8; corner++) {
+                    double[] v = { (corner & 1) == 0 ? c.from[0] : c.to[0], (corner & 2) == 0 ? c.from[1] : c.to[1], (corner & 4) == 0 ? c.from[2] : c.to[2] };
+                    double[] rel = { v[0] - c.origin[0], v[1] - c.origin[1], v[2] - c.origin[2] };
+                    double[] truth;
+                    if (solo) truth = apply(M, v);
+                    else { double[] r = { Re[0][0]*rel[0]+Re[0][1]*rel[1]+Re[0][2]*rel[2], Re[1][0]*rel[0]+Re[1][1]*rel[1]+Re[1][2]*rel[2], Re[2][0]*rel[0]+Re[2][1]*rel[1]+Re[2][2]*rel[2] }; truth = apply(W, new double[]{ r[0] + c.origin[0], r[1] + c.origin[1], r[2] + c.origin[2] }); }
+                    double[] e = CubeMath.apply(el, rel);
+                    double[] local = { e[0] + c.origin[0] - part.pivot[0], e[1] + c.origin[1] - part.pivot[1], e[2] + c.origin[2] - part.pivot[2] };
+                    double[] got = { Pw[0] + Rw[0][0]*local[0]+Rw[0][1]*local[1]+Rw[0][2]*local[2], Pw[1] + Rw[1][0]*local[0]+Rw[1][1]*local[1]+Rw[1][2]*local[2], Pw[2] + Rw[2][0]*local[0]+Rw[2][1]*local[1]+Rw[2][2]*local[2] };
+                    double err = Math.max(Math.abs(got[0] - truth[0]), Math.max(Math.abs(got[1] - truth[1]), Math.abs(got[2] - truth[2])));
+                    if (err > worst) { worst = err; worstCube = c.name; }
+                }
+            }
+            if (worst > 0.75 && clampNoted.add(name + "|verify|" + part.suffix)) warnings.add(name + ": SELF-CHECK part " + part.suffix + " (cube '" + worstCube + "') is drawn " + Math.round(worst * 10) / 10.0 + " px away from where Blockbench has it - please send this model file to the developer");
+        }
+
         /** Write the per-bone geometry once (bone-local, pivot at the centre, fitted into the Java range). */
         private void writeGeometry(Part part) {
             if (part.written) return;
@@ -1787,7 +1819,10 @@ public final class PackGenerator {
                     double[] w = { Pe[0][0]*v[0]+Pe[0][1]*v[1]+Pe[0][2]*v[2] + c.origin[0], Pe[1][0]*v[0]+Pe[1][1]*v[1]+Pe[1][2]*v[2] + c.origin[1], Pe[2][0]*v[0]+Pe[2][1]*v[1]+Pe[2][2]*v[2] + c.origin[2] };
                     for (int i = 0; i < 3; i++) { double q = 8 + (w[i] + shift[i] - 8) * part.k; lo[i] = Math.min(lo[i], q); hi[i] = Math.max(hi[i], q); }
                 }
-                for (int i = 0; i < 3; i++) { lo[i] = Math.max(-16, Math.min(32, lo[i])); hi[i] = Math.max(-16, Math.min(32, hi[i])); }
+                for (int i = 0; i < 3; i++) {
+                    if (lo[i] < -16.01 || hi[i] > 32.01) { if (clampNoted.add(name + "|cube|" + c.name)) warnings.add(name + ": cube '" + c.name + "' (part " + part.suffix + ") still exceeds the Java model range after fitting (" + Math.round(lo[i]) + ".." + Math.round(hi[i]) + " px on axis " + "xyz".charAt(i) + ") and is cut - it will look wrong; move its pivot nearer the cube or split the group"); }
+                    lo[i] = Math.max(-16, Math.min(32, lo[i])); hi[i] = Math.max(-16, Math.min(32, hi[i]));
+                }
                 JsonObject e = new JsonObject();
                 e.add("from", arr(lo));
                 e.add("to", arr(hi));
@@ -1897,6 +1932,7 @@ public final class PackGenerator {
                         new double[]{ clamp80(tr3[0]), clamp80(tr3[1]), clamp80(tr3[2]) },
                         new double[]{ Math.min(4, bs[0] / part.k), Math.min(4, bs[1] / part.k), Math.min(4, bs[2] / part.k) }));
                 }
+                if (clip == null) verifyPart(part, M, Pw, Rw);
                 String wrapPath = framePath + "__b" + part.suffix;
                 JsonObject wrap = new JsonObject();
                 wrap.addProperty("parent", NS + ":item/" + part.geomPath());

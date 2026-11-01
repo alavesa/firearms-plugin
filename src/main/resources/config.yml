@@ -1,6 +1,6 @@
 # ================================ FIREARMS ================================
 # CONTROLS:  LEFT-click = fire (SEMI: one shot per click; AUTO: hold to spray, release to stop)
-#            RIGHT-click = aim down the sight (toggle; zoom + aim clips), with a gun in hand
+#            HOLD RIGHT-click = aim down the sight (zoom + the gun's aim pose), with a gun in hand
 #            F          = reload (magazine swap, or one round at a time for pump-action guns)
 #            RIGHT-click with a MAGAZINE in hand = fill it from loose rounds in your inventory
 #            Sneak      = aim (tighter accuracy, half recoil)
@@ -83,6 +83,11 @@ damage:
     head-from: 0.75      # top 25 % of the hitbox = head
     legs-to: 0.4         # bottom 40 % = legs
 
+# ---- Sounds named after the model ----
+# Drop .ogg files into models/sounds named <model>_gunshot, <model>_reload, <model>_inspect (e.g. smg_gunshot.ogg):
+# they are packed as firearms:<model>_gunshot ... and used automatically for that gun's shot, reload and inspect
+# unless guns.yml names another sound for it.
+
 # ---- Shell casings ----
 casings:
   enabled: true
@@ -122,16 +127,30 @@ display:
   # the same place they did on the brick base. Turn off if you set your display values with that pose included.
   crossbow-compensate: true
 
-# ---- Aiming down the sight (right-click) ----
-# Right-click toggles the sight: the gun's aim_in clip plays once, then the aim clip loops until the next right-click
-# (aim_out). The zoom is a movement-speed modifier - the client scales its field of view with that attribute - so
-# aiming also slows walking; 0.35 = about 1.5x zoom. Sneaking still tightens accuracy like aiming does.
+# ---- Aiming down the sight (HOLD right-click) ----
+# While right-click is held the sight is up: the zoom is a movement-speed modifier (the client scales its field of
+# view with that attribute, so aiming also slows walking; 0.35 = about 1.5x), and the gun shows its AIM POSE - one
+# model per gun baked from the end of the .bbmodel's "aim" animation - sent to that client only as a hotbar slot
+# packet, so no animation frames and nothing else in the pack. Letting go of right-click drops the sight (the client
+# repeats the click every few ticks while held; hold-timeout-ticks is how long without one counts as released).
+# Reloading or firing while aiming plays that clip from the rest pose (the gun comes off the centre) and snaps back
+# onto the sight when it ends. Sneaking still tightens accuracy like aiming does.
 aim:
   speed-multiplier: 0.35
   sneak-aims: true
-  toggle-debounce-ms: 300
+  hold-timeout-ticks: 7
   sound-in: minecraft:item.spyglass.use
   sound-out: minecraft:item.spyglass.stop_using
+
+# ---- Reload ----
+# use-clip-length: the reload takes exactly as long as the reload animation that plays (so a fast "tactical" clip
+# reloads faster); false = guns.yml reload-seconds for every clip.
+# Reload and inspect animations can have several variants. Keywords in the animation's name choose them:
+#   "empty"              - for an empty magazine        "full" / "tactical" - for a magazine with rounds left
+#   neither              - fits both
+# Among the fitting variants the SHORTEST plays at full health and the LONGEST at low health.
+reload:
+  use-clip-length: true
 
 # ---- Stat sheet in the gun's description (0-10 bars; 10 = these maxima) ----
 stats:
@@ -216,12 +235,12 @@ anim:
     equip:   [equip, draw, deploy, pull, ready]
     pump:    [pump, rack, cock, bolt, cycle]
     inspect: [inspect, look, check]   # (not "idle": an idle animation would steal the inspect clip)
-    aim_in:  [aim_in, ads_in, scope_in]
-    aim:     [aim, ads, scope, aiming, sight]   # loops while aiming
+    aim:     [aim, ads, scope, aiming, sight]   # its END pose is the aiming pose (one model, shown client-side)
+    aim_in:  [aim_in, ads_in, scope_in]         # recognised and skipped: aiming is not frame-based
     aim_out: [aim_out, ads_out, scope_out]
   # Clips that keep EVERY matching animation as a variant played at random (reload, reload_2, reload_3 ...). Name
   # them in the .bbmodel e.g. "reload", "reload fast", "reload_b" - all match the reload keywords.
-  random-variants: [reload]
+  random-variants: [reload, inspect]
   # Animation channel signs relative to the rest pose. Default "auto": Blockbench 4.x files (format_version 4.*) use
   # rotation [-1,-1,1] and position [-1,1,1] (keyframes are stored in the Bedrock convention), Blockbench 5 files [1,1,1].
   # Override with explicit lists if a model still animates mirrored:

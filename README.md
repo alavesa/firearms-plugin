@@ -17,3 +17,7 @@ Commands: `/firearms list | give <id> [n] [player] | models | pack | reload`
 ## RP Engine
 
 Since 0.18 models are built and delivered through RP Engine; see [docs/RPENGINE.md](docs/RPENGINE.md) for how it works and how to set it up.
+
+## Documentation
+
+[docs/FIREARMS.md](docs/FIREARMS.md) is the full guide (install, controls, commands, guns.yml, models, troubleshooting); [docs/ANIMATIONS.md](docs/ANIMATIONS.md), [docs/HANDS.md](docs/HANDS.md) and [docs/RPENGINE.md](docs/RPENGINE.md) go deeper.
