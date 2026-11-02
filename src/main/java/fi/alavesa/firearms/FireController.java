@@ -55,7 +55,8 @@ public final class FireController implements Listener {
     private final Map<UUID, Integer> drawUntil = new ConcurrentHashMap<>();
     private final Map<UUID, Integer> aimSeen = new ConcurrentHashMap<>();     // last server tick a right-click arrived (the client repeats it every ~4 ticks while held)
     private final Set<UUID> aiming = ConcurrentHashMap.newKeySet();          // players holding the sight
-    private final Map<UUID, Vector> lastPos = new ConcurrentHashMap<>();      // position a tick ago: the client's own motion, for additive knockback
+    private final Map<UUID, Vector> lastPos = new ConcurrentHashMap<>();      // position a tick ago: is the shooter standing still?
+    private final Map<UUID, Integer> slowStamp = new ConcurrentHashMap<>();   // the latest knockback slow-down per player (older removals skip)
     private final NamespacedKey aimKey;
 
     public FireController(FirearmsPlugin plugin, Registry registry, Ballistics ballistics, Casings casings) {
@@ -142,22 +143,39 @@ public final class FireController implements Listener {
         playClip(p, gun, item, "fire");
     }
 
-    /** Push the shooter back a little. The server does not know the client's current motion, so it is estimated
-     *  from the last tick's movement and the push is ADDED to it: a sprinting player keeps running, just a bit
-     *  slower for a tick, instead of being stopped dead the way a bare velocity packet would. Horizontal only. */
+    /** Knockback on the shooter. Standing still: a short push back against the aim. Moving: NO push at all (a
+     *  velocity packet replaces the client's motion and stops a sprint dead) - instead a brief movement-speed
+     *  reduction, so the player keeps running, just a little slower for a few ticks. */
     private void knockback(Player p, GunType gun, Vector aim) {
         double k = gun.knockback() * (isAiming(p) ? plugin.getConfig().getDouble("knockback.aim-multiplier", 0.5) : 1.0);
         if (k <= 0) return;
-        Vector back = new Vector(-aim.getX(), 0, -aim.getZ());
-        if (back.lengthSquared() < 1e-6) return;
-        back.normalize().multiply(k);
         Vector was = lastPos.get(p.getUniqueId());
         Vector now = p.getLocation().toVector();
-        Vector motion = was == null ? new Vector(0, 0, 0) : now.clone().subtract(was);
-        if (motion.lengthSquared() > 4) motion = new Vector(0, 0, 0);          // a teleport, not movement
-        double vy = p.isOnGround() ? 0 : Math.max(-3, Math.min(3, p.getVelocity().getY()));
-        Vector v = new Vector(motion.getX() + back.getX(), vy, motion.getZ() + back.getZ());
-        if (!NmsRecoil.sendMotion(p, v.getX(), v.getY(), v.getZ())) p.setVelocity(v);
+        double moved = was == null ? 0 : Math.hypot(now.getX() - was.getX(), now.getZ() - was.getZ());
+        boolean still = moved < plugin.getConfig().getDouble("knockback.still-threshold", 0.03);
+        if (still && p.isOnGround()) {
+            Vector back = new Vector(-aim.getX(), 0, -aim.getZ());
+            if (back.lengthSquared() < 1e-6) return;
+            back.normalize().multiply(k);
+            if (!NmsRecoil.sendMotion(p, back.getX(), 0.02, back.getZ())) p.setVelocity(back);
+            return;
+        }
+        // moving (or airborne): slow, do not shove
+        int ticks = Math.max(1, plugin.getConfig().getInt("knockback.slow-ticks", 4));
+        double factor = Math.min(0.6, k * plugin.getConfig().getDouble("knockback.slow-per-unit", 2.0));   // 0.08 -> 16 % slower
+        if (factor <= 0) return;
+        var attr = p.getAttribute(org.bukkit.attribute.Attribute.MOVEMENT_SPEED);
+        if (attr == null) return;
+        var key = new org.bukkit.NamespacedKey(plugin, "knockback_slow");
+        attr.removeModifier(key);
+        attr.addTransientModifier(new org.bukkit.attribute.AttributeModifier(key, -factor, org.bukkit.attribute.AttributeModifier.Operation.MULTIPLY_SCALAR_1));
+        int stamp = slowStamp.merge(p.getUniqueId(), 1, Integer::sum);
+        plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+            if (!p.isOnline() || slowStamp.getOrDefault(p.getUniqueId(), 0) != stamp) return;   // a newer shot re-armed it
+            var a = p.getAttribute(org.bukkit.attribute.Attribute.MOVEMENT_SPEED);
+            if (a != null) a.removeModifier(key);
+            slowStamp.remove(p.getUniqueId());
+        }, ticks);
     }
 
     private int capacity(ItemStack item, GunType gun) {

@@ -6,7 +6,7 @@
 
   <groupId>fi.alavesa</groupId>
   <artifactId>firearms-plugin</artifactId>
-  <version>0.22.0</version>
+  <version>0.23.0</version>
   <packaging>jar</packaging>
 
   <name>Firearms</name>
@@ -44,7 +44,42 @@
       <scope>system</scope>
       <systemPath>${project.basedir}/libs/RPEngine-0.2.22.jar</systemPath>
     </dependency>
-  </dependencies>
+      <dependency>   <!-- the server's own netty, compile-only: the same-port pack host hooks the listening channel -->
+      <groupId>io.netty</groupId>
+      <artifactId>netty-common</artifactId>
+      <version>4.2.16.Final</version>
+      <scope>system</scope>
+      <systemPath>${project.basedir}/libs/netty-common-4.2.16.Final.jar</systemPath>
+    </dependency>
+    <dependency>   <!-- the server's own netty, compile-only: the same-port pack host hooks the listening channel -->
+      <groupId>io.netty</groupId>
+      <artifactId>netty-buffer</artifactId>
+      <version>4.2.16.Final</version>
+      <scope>system</scope>
+      <systemPath>${project.basedir}/libs/netty-buffer-4.2.16.Final.jar</systemPath>
+    </dependency>
+    <dependency>   <!-- the server's own netty, compile-only: the same-port pack host hooks the listening channel -->
+      <groupId>io.netty</groupId>
+      <artifactId>netty-transport</artifactId>
+      <version>4.2.16.Final</version>
+      <scope>system</scope>
+      <systemPath>${project.basedir}/libs/netty-transport-4.2.16.Final.jar</systemPath>
+    </dependency>
+    <dependency>   <!-- the server's own netty, compile-only: the same-port pack host hooks the listening channel -->
+      <groupId>io.netty</groupId>
+      <artifactId>netty-handler</artifactId>
+      <version>4.2.16.Final</version>
+      <scope>system</scope>
+      <systemPath>${project.basedir}/libs/netty-handler-4.2.16.Final.jar</systemPath>
+    </dependency>
+    <dependency>   <!-- the server's own netty, compile-only: the same-port pack host hooks the listening channel -->
+      <groupId>io.netty</groupId>
+      <artifactId>netty-resolver</artifactId>
+      <version>4.2.16.Final</version>
+      <scope>system</scope>
+      <systemPath>${project.basedir}/libs/netty-resolver-4.2.16.Final.jar</systemPath>
+    </dependency>
+</dependencies>
 
   <build>
     <plugins>

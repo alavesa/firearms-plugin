@@ -195,6 +195,8 @@ animations) measured on Paper 26.3:
 | 0.21, stock settings | 131 000 | 42 MB | 42 MB | 5 s |
 | 0.21 + `skip-animations` (`*_xmag`, `*_semi*`) + `hide-groups` (spare mags, folded sights, second handguard/adapter) | 66 000 | 21 MB | 21 MB | 4 s |
 
-Most of a 0.21 pack is zip bookkeeping for the wrapper files (about 190 bytes per file for 130 bytes of
+The file count matters twice: in the zip, and for whoever reads the files. Since 0.23 the zip is served by the plugin
+itself (same-port), not unpacked into RP Engine's content folder, because RP Engine reads every file on the main
+thread. Most of a 0.21 pack is zip bookkeeping for the wrapper files (about 190 bytes per file for 130 bytes of
 content), so the levers are the number of frames (fps, skipped animations, `anim.max-frames`) and of parts
 (hidden groups). The pack report's `build time` and `zip:` lines show where the time goes.

@@ -216,11 +216,14 @@ recoil:
   aim-multiplier: 0.5    # recoil while sneaking
 
 # ---- Knockback on the shooter ----
-# Each shot pushes the shooter back against the aim, ADDED to their own motion (a sprinting player keeps sprinting,
-# a touch slower for a tick) - never a stop. Per gun: guns.yml knockback (blocks per tick per shot); shown in the lore.
+# A shooter standing still is pushed back against the aim; a moving shooter is NOT pushed (a push packet stops a
+# sprint dead) but slowed a little for a few ticks. Per gun: guns.yml knockback; shown in the lore.
 knockback:
-  default: 0.08          # guns without their own value
+  default: 0.08          # guns without their own value (blocks per tick when standing still)
   aim-multiplier: 0.5    # while aiming
+  still-threshold: 0.03  # moved less than this in the last tick = standing still -> pushed back
+  slow-ticks: 4          # a MOVING shooter is never pushed (that would stop a sprint): slowed for this many ticks instead
+  slow-per-unit: 2.0     # speed reduction = knockback x this (0.08 -> 16 % slower), at most 60 %
 
 # ---- Accuracy ----
 accuracy:
@@ -302,10 +305,13 @@ pack:
   include-hidden-cubes: false   # cubes hidden in Blockbench (eye icon) are left out and reported; true keeps them
   # Getting the pack to players automatically (on join and right after /firearms pack, added on top of the server's
   # other packs). mode:
-  #   auto     - (default) rpengine when the RP Engine plugin is installed, else upload, and only if uploading fails
-  #              fall back to the built-in server. Nothing to configure.
+  #   auto     - (default) same-port; upload if the Minecraft port cannot be hooked. Nothing to configure.
+  #   same-port - the zip is served on the Minecraft port itself (the server's socket answers HTTP downloads next to
+  #              players), sent as a second pack next to the server's own. Nothing to open or upload. Not behind a
+  #              Velocity/Bungee proxy (those forward only the game protocol) - use upload there.
   #   rpengine - the pack is unpacked into plugins/RPEngine/content/firearms and RP Engine merges it into the server's
-  #              one pack, hosts it and sends it (its own host.mode); /firearms pack hands it over and reloads RP Engine.
+  #              one pack. NOT for animated packs: RP Engine reads every file on the main thread at every start and
+  #              reload - a 100 000-file pack is a minute of frozen server and the watchdog may restart it.
   #   self   - built-in HTTP server on `port`. The port MUST be reachable by players (open it in the firewall / hosting
   #            panel) and it can NOT be the Minecraft port - the game server owns that one. address: the host or IP
   #            players use to reach the server ("" = the address each player connected with).

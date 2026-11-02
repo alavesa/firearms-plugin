@@ -1,3 +1,10 @@
+> **0.23 (2026-11-02):** the Firearms pack is no longer handed to RP Engine by default. An animated gun pack is
+> 60 000-130 000 small model files, and RP Engine's `reload()` reads every one of them on the main thread (a minute of
+> frozen server here, enough for Paper's watchdog), at every reload AND every server start. `pack.host.mode: auto`
+> now serves the zip on the Minecraft port itself as a second, stacked pack; RP Engine keeps only the flinch emote
+> rigs in `content/firearms/players`. The description below of the `rpengine` hand-over still applies when that mode
+> is chosen explicitly.
+
 # Firearms and RP Engine
 
 Since 0.18 the plugin hands its models to [RP Engine](https://hangar.papermc.io/ResourcePackAI/RPEngine), which builds

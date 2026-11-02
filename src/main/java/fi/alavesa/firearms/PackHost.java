@@ -36,6 +36,7 @@ public final class PackHost implements org.bukkit.event.Listener {
     private static final UUID PACK_ID = UUID.nameUUIDFromBytes("fi.alavesa.firearms.pack".getBytes(StandardCharsets.UTF_8));
     private final FirearmsPlugin plugin;
     private HttpServer server;
+    private SamePortHttp samePort;
     private String sha1 = "";
     private String uploadedUrl = "", uploadedSha1 = "";
     private String lastProblem = "";
@@ -44,13 +45,13 @@ public final class PackHost implements org.bukkit.event.Listener {
     public PackHost(FirearmsPlugin plugin) { this.plugin = plugin; }
 
     public boolean enabled() { return plugin.getConfig().getBoolean("pack.host.enabled", true); }
-    /** Configured mode; "auto" (the default) = upload, falling back to the built-in server if uploading fails. */
+    /** Configured mode; "auto" (the default) = same-port: the zip is served on the Minecraft port itself. */
     public String configuredMode() { return plugin.getConfig().getString("pack.host.mode", "auto").toLowerCase(Locale.ROOT).trim(); }
     private boolean autoFellBack;
     /** The mode in effect right now. */
     public String mode() {
         String m = configuredMode();
-        if (m.equals("auto")) return rpEngineInstalled() ? "rpengine" : autoFellBack ? "self" : "upload";
+        if (m.equals("auto")) return autoFellBack ? "upload" : "same-port";
         return m;
     }
 
@@ -130,13 +131,45 @@ public final class PackHost implements org.bukkit.event.Listener {
         if (!enabled()) return;
         plugin.getServer().getPluginManager().registerEvents(this, plugin);
         refreshHash();
+        if (!mode().equals("rpengine")) retireRpEngineHandover();
         switch (mode()) {
+            case "same-port" -> startSamePort();
             case "rpengine" -> { plugin.getLogger().info("Pack host: RP Engine mode - the Firearms pack is merged into RP Engine's pack (content/firearms) and delivered by RP Engine."); if (installIntoRpEngine() && handoverChanged) plugin.getServer().getScheduler().runTask(plugin, this::reloadRpEngine); }
             case "self" -> startServer();
             case "upload" -> { plugin.getLogger().info("Pack host: " + (configuredMode().equals("auto") ? "auto mode - " : "upload mode - ") + "the pack is uploaded to a public file host after each build and that link is sent to players (no port to open)."); plugin.getServer().getScheduler().runTaskAsynchronously(plugin, this::prepareAsync); }
             case "url" -> plugin.getLogger().info("Pack host: url mode - players get " + plugin.getConfig().getString("pack.host.url", "") + " (re-upload the zip there after each /firearms pack).");
-            default -> plugin.getLogger().warning("pack.host.mode must be auto, rpengine, self, upload or url (is '" + mode() + "') - nothing is sent.");
+            default -> plugin.getLogger().warning("pack.host.mode must be auto, same-port, rpengine, self, upload or url (is '" + mode() + "') - nothing is sent.");
         }
+    }
+
+    /** Serve the zip on the Minecraft port: nothing to open, nothing to upload, and RP Engine never reads our files. */
+    private void startSamePort() {
+        if (samePort != null) return;
+        SamePortHttp h = new SamePortHttp(plugin, this::zip);
+        String problem = h.install();
+        if (problem != null) {
+            lastProblem = "could not hook the Minecraft port for pack downloads (" + problem + ")";
+            plugin.getLogger().severe("Pack host NOT started: " + lastProblem + " - set pack.host.mode: upload or self.");
+            if (configuredMode().equals("auto")) { autoFellBack = true; plugin.getLogger().warning("Pack host: falling back to upload mode."); plugin.getServer().getScheduler().runTaskAsynchronously(plugin, this::prepareAsync); }
+            return;
+        }
+        samePort = h;
+        lastProblem = "";
+        plugin.getLogger().info("Pack host: same-port mode - Firearms-pack.zip is served on the Minecraft port (" + plugin.getServer().getPort() + ") as a second pack next to the server's own. Nothing to open. (Behind a Velocity/Bungee proxy use pack.host.mode: upload.)");
+    }
+
+    /** Not in rpengine mode any more: take our generated files out of plugins/RPEngine/content/firearms, so RP Engine
+     *  stops reading a hundred thousand model files on the main thread at every start and reload. The players/ rigs
+     *  (flinch emotes) stay - without a pack.yml the folder is a plain BetterModel-style folder again. */
+    private void retireRpEngineHandover() {
+        if (!rpEngineInstalled()) return;
+        try {
+            File pack = new File(new File(((ai.resourcepack.engine.RPEnginePlugin) org.bukkit.Bukkit.getPluginManager().getPlugin("RPEngine")).getDataFolder(), "content"), "firearms");
+            boolean any = false;
+            for (String n : new String[]{"assets", "overrides"}) { File d = new File(pack, n); if (d.isDirectory()) { deleteTree(d); any = true; } }
+            for (String n : new String[]{"pack.yml", ".firearms-sha1"}) { File f = new File(pack, n); if (f.isFile() && f.delete()) any = true; }
+            if (any) plugin.getLogger().info("Pack host: removed the Firearms pack from plugins/RPEngine/content/firearms (it is served by Firearms itself now; the emote rigs stay there). RP Engine rebuilds without it at its next reload or restart.");
+        } catch (Exception e) { plugin.getLogger().warning("Pack host: could not clean plugins/RPEngine/content/firearms: " + e.getMessage()); }
     }
 
     private void startServer() {
@@ -168,7 +201,7 @@ public final class PackHost implements org.bukkit.event.Listener {
         }
     }
 
-    public void stop() { if (server != null) { server.stop(0); server = null; } }
+    public void stop() { if (server != null) { server.stop(0); server = null; } if (samePort != null) { samePort.uninstall(); samePort = null; } }
 
     public void refreshHash() {
         try {
@@ -237,10 +270,21 @@ public final class PackHost implements org.bukkit.event.Listener {
         try { return java.net.InetAddress.getLocalHost().getHostAddress(); } catch (Exception e) { return "localhost"; }
     }
 
+    /** host:port the player reached the Minecraft server by (the handshake's address, or pack.host.address). */
+    String hostPort(Player p) {
+        String host = addressFor(p);
+        int port = plugin.getServer().getPort();
+        String cfg = plugin.getConfig().getString("pack.host.address", "");
+        if (cfg == null || cfg.isBlank()) try { var vh = p.getVirtualHost(); if (vh != null && vh.getPort() > 0) port = vh.getPort(); } catch (Throwable ignored) { }
+        if (host.contains(":") && !host.startsWith("[")) host = "[" + host + "]";   // a bare IPv6 literal
+        return host + ":" + port;
+    }
+
     /** The URL this player should download, or null (with lastProblem set) when nothing can be sent. */
     public String urlFor(Player p) {
         switch (mode()) {
             case "rpengine" -> { return "(merged into RP Engine's pack)"; }
+            case "same-port" -> { if (samePort == null) return null; return "http://" + hostPort(p) + "/firearms/" + (sha1.isEmpty() ? "pack" : sha1) + ".zip"; }
             case "self" -> { if (server == null) return null; return "http://" + addressFor(p) + ":" + port() + "/Firearms-pack.zip?v=" + (sha1.isEmpty() ? "0" : sha1.substring(0, 12)); }
             case "upload" -> { if (uploadedUrl.isEmpty() || !uploadedSha1.equals(sha1)) return null; return uploadedUrl; }
             case "url" -> { String u = plugin.getConfig().getString("pack.host.url", ""); return u == null || u.isBlank() ? null : u.trim(); }
@@ -274,6 +318,7 @@ public final class PackHost implements org.bukkit.event.Listener {
     public void sendAll() {
         if (mode().equals("rpengine")) {
             if (!installIntoRpEngine()) return;
+            try (java.util.zip.ZipFile zf = new java.util.zip.ZipFile(zip())) { if (zf.size() > 20000) notifyAdmins("The Firearms pack has " + zf.size() + " files - RP Engine reads every one on the main thread at each reload and start (a minute or more, Paper's watchdog may restart the server). pack.host.mode: auto (same-port) is strongly recommended."); } catch (Exception ignored) { }
             if (!handoverChanged) { plugin.getLogger().info("Pack host: the Firearms pack is unchanged - RP Engine keeps its current build."); return; }
             int delay = plugin.getConfig().getInt("pack.host.rpengine-reload-delay", 20);
             if (delay < 0) { notifyAdmins("Firearms pack handed to RP Engine - run /rp reload when convenient (the server pauses while RP Engine rebuilds its pack)."); return; }
@@ -305,6 +350,7 @@ public final class PackHost implements org.bukkit.event.Listener {
         if (!lastProblem.isEmpty()) return "pack host PROBLEM: " + lastProblem;
         return switch (mode()) {
             case "rpengine" -> "pack host: RP Engine mode - the Firearms pack is part of RP Engine's pack (plugins/RPEngine/content/firearms) and RP Engine delivers it.";
+            case "same-port" -> samePort == null ? "pack host not running." : "pack host: same-port mode - the zip is served on the Minecraft port itself (" + samePort.served() + " download(s) so far); players get http://<their server address>/firearms/<sha1>.zip" + (plugin.getConfig().getString("pack.host.address", "").isBlank() ? "" : ", pack.host.address=" + plugin.getConfig().getString("pack.host.address")) + ".";
             case "self" -> server == null ? "pack host not running." : "pack host: built-in server on port " + port() + " (open it to players; address = the one they connect with" + (plugin.getConfig().getString("pack.host.address", "").isBlank() ? "" : ", pack.host.address=" + plugin.getConfig().getString("pack.host.address")) + ").";
             case "upload" -> uploadedUrl.isEmpty() ? "pack host: upload mode, nothing uploaded yet (uploading / run /firearms pack)." : "pack host: " + (configuredMode().equals("auto") ? "auto (upload)" : "upload mode") + ", players get " + uploadedUrl + (uploadedSha1.equals(sha1) ? "" : " (OUTDATED - run /firearms pack)");
             case "url" -> "pack host: url mode, players get " + plugin.getConfig().getString("pack.host.url", "");
@@ -321,6 +367,7 @@ public final class PackHost implements org.bukkit.event.Listener {
         if (st == PlayerResourcePackStatusEvent.Status.DECLINED) return;
         String url = urlFor(e.getPlayer());
         String hint = switch (mode()) {
+            case "same-port" -> "the client could not fetch " + url + " - is the server behind a proxy (Velocity/Bungee pass only the game protocol)? Then set pack.host.mode: upload. Otherwise set pack.host.address to the host players use.";
             case "self" -> "the client could not fetch " + url + " - port " + port() + " is not reachable from outside (open it in the firewall / hosting panel, or set pack.host.address to the public host/IP), or switch to pack.host.mode: upload (no port needed).";
             case "upload" -> "the client could not fetch " + url + " - the file host may be blocked for that player; try pack.host.mode: self or url.";
             default -> "the client could not fetch " + url + " - check that the URL serves the CURRENT Firearms-pack.zip (sha1 " + sha1 + ").";

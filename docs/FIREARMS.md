@@ -15,6 +15,12 @@ turns Blockbench models and animations into first-person gun models delivered th
    [RPENGINE.md](RPENGINE.md). Without it, `pack.host.mode` chooses between an upload host, a built-in HTTP server
    or a URL of your own.
 
+Pack delivery (0.23): `pack.host.mode: auto` serves `Firearms-pack.zip` on the Minecraft port itself, so there is
+no port to open and nothing to upload; the client downloads it as a second pack next to the server's own (RP Engine's,
+if installed). Behind a Velocity/Bungee proxy, which forwards only the game protocol, set `upload`. The `rpengine`
+mode still exists but is not for animated packs: RP Engine reads every file of its content folder on the main
+thread at every reload and start, which with 100 000 frame files freezes the server for a minute.
+
 ## Controls
 
 | Input | Does |
@@ -123,6 +129,7 @@ the thing to send along with the model file.
 | a frame is purple while firing | the pack players hold is older than the server's animation index; run `/firearms pack` and let it re-send |
 | the server pauses after `/firearms pack` | RP Engine rebuilding its pack on the main thread; see RPENGINE.md (batched reload) |
 | a part floats or is twisted | run `/firearms pack`, read the self-check and range warnings, send the named part and the file |
+| guns are purple-and-black cubes after a rebuild, or the pack only updates after a rejoin | until 0.23 the pack was handed to RP Engine, which reads every one of its 100 000+ files on the main thread at each reload and start: a minute of frozen server, a watchdog restart, a half-delivered pack. Since 0.23 the zip is served by Firearms itself on the Minecraft port (`pack.host.mode: auto` = same-port) as a second pack; RP Engine keeps only the emote rigs |
 | adding one model turns every gun into a plain crossbow | one bad case drops the whole items file on the client; since 0.22 a model that fails to convert is rolled back to a placeholder and every case is validated before it is written - read the warning, which names the model and the cause, and send that .bbmodel |
 | a Blockbench 5 model is scrambled, its animations swing wildly | plugin older than 0.21 ignored the `groups` list of Blockbench 5 files (every pivot became 0,0,0); update and rebuild |
 | the pack is hundreds of MB or the build takes minutes | `anim.fps.inspect: 10` (default), per gun `skip-animations` / `hide-groups`, `anim.max-frames`; see ANIMATIONS.md *Pack size and frames* |
