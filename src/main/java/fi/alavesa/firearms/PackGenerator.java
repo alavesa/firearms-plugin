@@ -59,6 +59,8 @@ public final class PackGenerator {
     private final Map<String, Map<String, int[]>> animIndex = new LinkedHashMap<>();
     private final Map<String, Map<String, List<Integer>>> frameStartIndex = new LinkedHashMap<>();   // model -> clip -> tick each written frame starts at
     private int heldFrames;                                                                             // sampled frames identical to the previous one (not written)
+    private final Map<String, Long> quadsPerModel = new LinkedHashMap<>();                               // model -> quads the CLIENT bakes (every distinct part pose bakes its geometry again)
+    private int zeroUvFacesDropped, hiddenFacesDropped;
     /** Clip keys the plugin can play; animations mapping to anything else are not baked (anim.bake-unknown: true bakes them anyway). */
     private static final java.util.Set<String> KNOWN_CLIPS = java.util.Set.of("fire", "reload", "equip", "pump", "inspect", "aim", "unpin", "throw");
     private final Map<String, Map<String, String>> clipNameIndex = new LinkedHashMap<>();   // model -> clip key -> animation name
@@ -168,6 +170,15 @@ public final class PackGenerator {
         report.add("");
         report.add("warnings:");
         if (warnings.isEmpty()) report.add("  none"); else for (String w : warnings) report.add("  ! " + w);
+        long quads = 0; for (long q : quadsPerModel.values()) quads += q;
+        if (quads > 0) {
+            StringBuilder sb = new StringBuilder("client memory: the client bakes every distinct part pose separately - " + quads + " quads in all (~" + (quads * 200 / 1048576) + " MB on every client):");
+            quadsPerModel.entrySet().stream().sorted((a, b) -> Long.compare(b.getValue(), a.getValue())).forEach(e -> sb.append(' ').append(e.getKey()).append(' ').append(e.getValue() / 1000).append("k"));
+            if (zeroUvFacesDropped > 0 || hiddenFacesDropped > 0) sb.append("  (").append(zeroUvFacesDropped).append(" zero-UV and ").append(hiddenFacesDropped).append(" buried faces per geometry left out)");
+            report.add(sb.toString());
+            long warnAt = plugin.getConfig().getLong("pack.client-quads-warn", 1_500_000L);
+            if (quads > warnAt) warnings.add("CLIENT MEMORY: " + quads + " baked quads (~" + (quads * 200 / 1048576) + " MB) - a client with the default 2 GB runs out of memory loading this pack (every gun purple/black or a crash). Cut it with guns.yml skip-animations / hide-groups, anim.fps (inspect 10, reload 15), anim.max-frames: biggest first:" + quadsPerModel.entrySet().stream().sorted((a, b) -> Long.compare(b.getValue(), a.getValue())).limit(3).map(e -> " " + e.getKey() + " " + e.getValue() / 1000 + "k").reduce("", String::concat));
+        }
         if (reusedWrappersTotal > 0 || heldFrames > 0) report.add("frames: " + reusedWrappersTotal + " part pose(s) shared between frames (one file per distinct pose), " + heldFrames + " sampled frame(s) identical to the previous one held instead of written");
         put("pack-report.txt", String.join("\n", report));
         if (!dryRun) try { Files.writeString(new File(plugin.getDataFolder(), "pack-report.txt").toPath(), String.join("\n", report)); } catch (IOException ignored) { }
@@ -263,7 +274,7 @@ public final class PackGenerator {
                 sel.addProperty("type", "minecraft:select");
                 sel.addProperty("property", "minecraft:display_context");
                 JsonArray sc = new JsonArray();
-                boolean handsHere = cp.get(1) != cp.get(0);
+                boolean handsHere = cp.size() > 3 && !cp.get(3).isEmpty();
                 if (handsHere) {
                     JsonObject fpm;
                     if (cp.get(2) != cp.get(1)) {
@@ -1229,7 +1240,7 @@ public final class PackGenerator {
             String baseKey = key.replaceAll("_\\d+$", "");
             double fps = plugin.getConfig().getDouble("anim.fps.default", 20);
             if (plugin.getConfig().contains("anim.fps." + baseKey)) fps = plugin.getConfig().getDouble("anim.fps." + baseKey);
-            else if (baseKey.equals("inspect") && !plugin.getConfig().contains("anim.fps.default")) fps = 10;   // same default as the shipped config.yml for older config files
+            else if (!plugin.getConfig().contains("anim.fps.default")) fps = baseKey.equals("inspect") ? 10 : baseKey.equals("reload") || baseKey.equals("equip") ? 15 : 20;   // the shipped config.yml defaults, for older config files
             if (currentGun != null && currentGun.animCfg() != null && currentGun.animCfg().contains(baseKey + ".fps")) fps = currentGun.animCfg().getDouble(baseKey + ".fps");
             fps = Math.max(1, Math.min(20.0 / frameTicks, fps));
             int n = 0;
@@ -1882,6 +1893,7 @@ public final class PackGenerator {
             Bone bone; String suffix; int variant;           // 0 plain, 1 classic hand, 2 slim hand, 3 flash (model), 4 generated flash
             List<Cube> cubes = new ArrayList<>(); double k = 1; List<Integer> tints = new ArrayList<>(); boolean written;
             double[] pivot;                                  // the part's rotation pivot (owner bone origin, or the first cube's origin in owner space)
+            int faces;                                       // faces actually written: what the client bakes for every pose of this part
             double[][] extra = identity();                   // the part's own transform below the owner (a display part's shared rotation about pivot)
             boolean displayPart;
             final Map<Cube, double[]> shift = new HashMap<>();          // per cube: where its box is written in part space (box + shift)
@@ -2038,6 +2050,22 @@ public final class PackGenerator {
             part.k = far > 23.9 ? 23.9 / far : 1.0;
             JsonArray elements = new JsonArray();
             int localTint = 0;
+            // The client bakes this geometry again for EVERY pose of the part (one wrapper = one bake), so every face
+            // written here costs memory on every client times the number of frames. Two kinds are free to drop:
+            // faces the modeller hid with a zero-area UV, and faces of plain boxes buried inside another plain box.
+            boolean dropZeroUv = plugin.getConfig().getBoolean("pack.drop-zero-uv-faces", true);
+            boolean cullHidden = plugin.getConfig().getBoolean("pack.cull-hidden-faces", true);
+            Map<Cube, double[][]> boxes = new HashMap<>();   // cube -> {lo, hi} as written; plain (unrotated-in-part) boxes only
+            for (Cube c : part.cubes) {
+                double[] sh = part.shift.getOrDefault(c, new double[]{0, 0, 0});
+                double[] lo = new double[3], hi = new double[3];
+                for (int i = 0; i < 3; i++) {
+                    lo[i] = 8 + (Math.min(c.from[i], c.to[i]) - c.inflate + sh[i] + shift[i] - 8) * part.k;
+                    hi[i] = 8 + (Math.max(c.from[i], c.to[i]) + c.inflate + sh[i] + shift[i] - 8) * part.k;
+                }
+                if (part.elemRot.get(c) == null && c.tint < 0 && !c.flash) boxes.put(c, new double[][]{lo, hi});
+            }
+            part.faces = 0;
             for (Cube c : part.cubes) {
                 double[] sh = part.shift.getOrDefault(c, new double[]{0, 0, 0});
                 double[] ea = part.elemRot.get(c);
@@ -2049,6 +2077,7 @@ public final class PackGenerator {
                     if (a < -16.01 || b > 32.01) { if (clampNoted.add(name + "|cube|" + c.name)) warnings.add(name + ": cube '" + c.name + "' (part " + part.suffix + ") still exceeds the Java model range after fitting (" + Math.round(a) + ".." + Math.round(b) + " px on axis " + "xyz".charAt(i) + ") and is cut - it will look wrong; move its pivot nearer the cube or split the group"); }
                     lo[i] = Math.max(-16, Math.min(32, a)); hi[i] = Math.max(-16, Math.min(32, b));
                 }
+                double[][] myBox = boxes.get(c);
                 JsonObject e = new JsonObject();
                 e.add("from", arr(lo));
                 e.add("to", arr(hi));
@@ -2071,9 +2100,15 @@ public final class PackGenerator {
                     }
                 }
                 JsonObject faces = new JsonObject();
-                for (String f : FACE) {
+                for (int fi = 0; fi < FACE.length; fi++) {
+                    String f = FACE[fi];
                     if (!srcFaces.has(f) || !srcFaces.get(f).isJsonObject()) continue;
                     JsonObject bf = srcFaces.getAsJsonObject(f);
+                    if (dropZeroUv && c.tint < 0 && part.variant != 4 && bf.has("uv")) {
+                        double[] uv = vec4(bf.get("uv"));
+                        if (Math.abs(uv[0] - uv[2]) < 1e-9 || Math.abs(uv[1] - uv[3]) < 1e-9) { zeroUvFacesDropped++; continue; }   // a face the modeller hid
+                    }
+                    if (cullHidden && myBox != null && faceBuried(myBox, fi, c, boxes)) { hiddenFacesDropped++; continue; }
                     JsonObject face = new JsonObject();
                     if (c.tint >= 0) {
                         face.add("uv", arr(0, 0, 16, 16));
@@ -2092,7 +2127,9 @@ public final class PackGenerator {
                         if (bf.has("rotation")) face.addProperty("rotation", (int) num(bf.get("rotation"), 0));
                     }
                     faces.add(f, face);
+                    part.faces++;
                 }
+                if (faces.size() == 0) continue;                 // nothing visible: the box costs nothing then
                 e.add("faces", faces);
                 elements.add(e);
             }
@@ -2102,6 +2139,30 @@ public final class PackGenerator {
             model.add("textures", tex);
             model.add("elements", elements);
             put("assets/" + NS + "/models/item/" + part.geomPath() + ".json", GSON.toJson(model));
+        }
+
+        /** Is face fi (FACE order: north south east west up down) of this plain box completely inside, or flush on the
+         *  surface of, another plain box of the same part so that it can never be seen? Touching boxes that merely share
+         *  a side keep both faces (either could be the outer one); only a face with box material BEYOND it goes. */
+        private boolean faceBuried(double[][] box, int fi, Cube self, Map<Cube, double[][]> boxes) {
+            int axis = fi <= 1 ? 2 : fi <= 3 ? 0 : 1;                  // north/south z, east/west x, up/down y
+            boolean positive = fi == 1 || fi == 2 || fi == 4;           // south +z, east +x, up +y
+            double plane = positive ? box[1][axis] : box[0][axis];
+            double eps = 1e-4;
+            for (var en : boxes.entrySet()) {
+                if (en.getKey() == self) continue;
+                double[][] o = en.getValue();
+                boolean covers = true;
+                for (int a = 0; a < 3 && covers; a++) {
+                    if (a == axis) continue;
+                    if (o[0][a] - eps > box[0][a] || o[1][a] + eps < box[1][a]) covers = false;
+                }
+                if (!covers) continue;
+                if (plane < o[0][axis] - eps || plane > o[1][axis] + eps) continue;      // the plane is not within the other box's span
+                boolean beyond = positive ? o[1][axis] > plane + eps : o[0][axis] < plane - eps;   // material on the outside of this face
+                if (beyond) return true;
+            }
+            return false;
         }
 
         /** Exact world matrix of a bone at this frame: rest pose + base pose + the clip at time t, full chain,
@@ -2191,6 +2252,7 @@ public final class PackGenerator {
                     wrapPath = rest ? mpath + "__b" + part.suffix : mpath + "__w" + (wrapperCount++);
                     wrapperByJson.put(wrapJson, wrapPath);
                     put("assets/" + NS + "/models/item/" + wrapPath + ".json", wrapJson);
+                    quadsPerModel.merge(name, (long) part.faces, Long::sum);
                 } else reusedWrappersTotal++;
                 if (lastPrimary == null) lastPrimary = wrapPath;
                 sig.append(wrapPath).append(';');
@@ -2212,7 +2274,8 @@ public final class PackGenerator {
             // parts anyway (variants 1-4 never reach `plain` of the rest pose).
             boolean animateThird = plugin.getConfig().getBoolean("third-person.animate", false);
             List<Object[]> third = !animateThird && restPlain != null ? restPlain : lastPlain;
-            compositeParts.put(cmd, List.of(third, hands ? lastClassic : lastPlain, hands ? lastSlim : lastPlain));
+            List<Object[]> handsMark = new ArrayList<>(); if (hands) handsMark.add(new Object[0]);
+            compositeParts.put(cmd, List.of(third, hands ? lastClassic : lastPlain, hands ? lastSlim : lastPlain, handsMark));
             return lastPrimary != null ? lastPrimary : mpath + "__b0";
         }
     }

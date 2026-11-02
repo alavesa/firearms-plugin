@@ -200,3 +200,35 @@ itself (same-port), not unpacked into RP Engine's content folder, because RP Eng
 thread. Most of a 0.21 pack is zip bookkeeping for the wrapper files (about 190 bytes per file for 130 bytes of
 content), so the levers are the number of frames (fps, skipped animations, `anim.max-frames`) and of parts
 (hidden groups). The pack report's `build time` and `zip:` lines show where the time goes.
+
+## Client memory (0.24) - the real limit of animated item models
+
+The Minecraft client bakes every model it may ever draw when it loads a pack, and it bakes the geometry of a part
+**again for every pose the part appears in** (verified in the 26.3 client: `CuboidItemModelWrapper` calls
+`bakeTopGeometry` per model id, nothing is shared between models with the same parent). A frame of a gun is one
+baked copy of every visible cube of every part, so the cost on **every player's** machine is roughly
+
+    cubes x visible faces x frames x 200 bytes
+
+The team's three TaCZ exports (259 + 1004 + 764 cubes, 17-31 animations each) came to 6 million quads, over 1 GB,
+which is more than a client on the default 2 GB heap has left after the game itself: the pack reload dies, every
+gun is purple-and-black or the game crashes. **This is what "the pistol breaks the whole pack" was**: the pistol was
+the straw, not the cause. `/firearms pack` now prints the estimate (`client memory:` in the report) and warns above
+`pack.client-quads-warn` (1.5 million).
+
+What 0.24 does by itself (exact, nothing visible changes):
+
+- faces the modeller hid with a zero-area UV are not written (20-31 % of all faces in TaCZ exports);
+- faces of a box buried inside another box of the same part are not written;
+- reload and equip clips are sampled at 15 fps, inspect at 10 (`anim.fps`).
+
+What only you can decide, per gun in guns.yml, because it changes what is in the pack:
+
+- `skip-animations: ["*_semi*", "*_xmag"]` - fire-mode and attachment variants of every animation are the biggest
+  item; each one is a full set of frames;
+- `hide-groups: [mag_extended_1, ...]` - attachment variants drawn on top of each other cost cubes in every frame;
+- `anim: { inspect: { fps: 6 } }` for a 12-second inspect that nobody watches frame by frame;
+- a simpler model: 1004 cubes is a mod-level mesh; vanilla item models carry a few hundred comfortably.
+
+Measured: the three guns as sent, 4.0 million quads (~770 MB); with the skip and hide lists above, about half of that.
+A client with 4 GB handles the latter; keep below about 1.5 million for 2 GB clients.
