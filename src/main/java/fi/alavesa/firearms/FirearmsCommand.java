@@ -83,6 +83,15 @@ public final class FirearmsCommand implements CommandExecutor, TabCompleter {
                 sender.sendMessage(line(dir, plugin.getConfig().getString("craters.model", "crater"), "crater (or crater.png)"));
                 return true;
             }
+            case "mode", "firemode" -> {
+                if (!(sender instanceof Player pl)) { sender.sendMessage("Players only."); return true; }
+                ItemStack held = pl.getInventory().getItemInMainHand();
+                GunType g = plugin.registry.gunOf(held);
+                if (g == null) { sender.sendMessage(Component.text("Hold a gun.", NamedTextColor.RED)); return true; }
+                String nm = plugin.registry.toggleMode(held, g);
+                sender.sendMessage(Component.text(nm == null ? g.id() + " has one fire mode only (guns.yml fire-mode: \"semi,auto\" makes it switchable)." : g.id() + " is now " + nm.toUpperCase() + ".", nm == null ? NamedTextColor.YELLOW : NamedTextColor.GREEN));
+                return true;
+            }
             case "clips" -> {
                 if (args.length < 2) { sender.sendMessage(Component.text("/firearms clips <model>", NamedTextColor.YELLOW)); return true; }
                 String model = args[1];

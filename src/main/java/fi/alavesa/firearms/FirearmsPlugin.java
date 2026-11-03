@@ -28,6 +28,8 @@ public final class FirearmsPlugin extends JavaPlugin {
     private HitAnimations hitAnimations;
     PackHost packHost;
     DisplayRig rig;
+    Viewmodels viewmodels;
+    public Viewmodels viewmodels() { return viewmodels; }
     public DisplayRig rig() { return rig; }
     public HitAnimations hitAnimations() { return hitAnimations; }
     public PackHost packHost() { return packHost; }
@@ -63,6 +65,9 @@ public final class FirearmsPlugin extends JavaPlugin {
         FirearmsCommand cmd = new FirearmsCommand(this);
         getCommand("firearms").setExecutor(cmd);
         getCommand("firearms").setTabCompleter(cmd);
+        viewmodels = new Viewmodels(this);
+        getCommand("viewmodel").setExecutor(viewmodels);
+        getCommand("viewmodel").setTabCompleter(viewmodels);
         hitAnimations = new HitAnimations(this);
         if (hitAnimations.available()) {
             try { hitAnimations.sync(); } catch (Throwable t) { getLogger().warning("RP Engine rig sync failed: " + t); }

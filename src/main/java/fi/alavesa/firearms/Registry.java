@@ -48,7 +48,7 @@ public final class Registry {
     /** model -> clip key -> the animation's own name in the .bbmodel (for the empty / full / tactical keywords). */
     private final Map<String, Map<String, String>> clipNames = new LinkedHashMap<>();
 
-    final NamespacedKey gunKey, magKey, ammoKey, roundsKey, uidKey, craterKey, vestKey, grenadeKey;
+    final NamespacedKey gunKey, magKey, ammoKey, roundsKey, uidKey, craterKey, vestKey, grenadeKey, modeKey;
 
     /** True once a gun was successfully given the adventure-mode can_break component. */
     static boolean canBreakOk = false;
@@ -65,6 +65,7 @@ public final class Registry {
         craterKey = new NamespacedKey(plugin, "crater");
         vestKey = new NamespacedKey(plugin, "vest");
         grenadeKey = new NamespacedKey(plugin, "grenade");
+        modeKey = new NamespacedKey(plugin, "fire_mode");
     }
 
     // ------------------------------------------------------------------ loading
@@ -314,8 +315,27 @@ public final class Registry {
         return m.getOrDefault(clip, List.of());
     }
 
-    /** Is this gun AUTO? The fire mode is the gun's own (guns.yml fire-mode); right-click aims since 0.19. */
-    public boolean isAuto(ItemStack it, GunType gun) { return gun.auto(); }
+    /** Is this gun AUTO? fire-mode "auto" = always; "semi,auto" / "auto,semi" = switchable, AUTO unless the item was
+     *  switched to semi with /firearms mode (right-click aims since 0.19, so it no longer toggles the mode - which
+     *  silently turned every "semi,auto" rifle into a semi gun in 0.19-0.25). */
+    public boolean isAuto(ItemStack it, GunType gun) {
+        if (!gun.switchable()) return gun.auto();
+        if (it != null && it.hasItemMeta()) {
+            String m = it.getItemMeta().getPersistentDataContainer().get(modeKey, PersistentDataType.STRING);
+            if (m != null) return m.equals("auto");
+        }
+        return true;
+    }
+
+    /** Toggle a switchable gun item between auto and semi. Returns the new mode, or null when the gun has one mode only. */
+    public String toggleMode(ItemStack it, GunType gun) {
+        if (!gun.switchable() || it == null || !it.hasItemMeta()) return null;
+        boolean nowAuto = isAuto(it, gun);
+        ItemMeta meta = it.getItemMeta();
+        meta.getPersistentDataContainer().set(modeKey, PersistentDataType.STRING, nowAuto ? "semi" : "auto");
+        it.setItemMeta(meta);
+        return nowAuto ? "semi" : "auto";
+    }
 
     /** The variants of a clip baked for this model (reload, reload_2 ...), with their names and lengths. */
     public List<VariantPicker.Variant> variants(String model, String clip) {

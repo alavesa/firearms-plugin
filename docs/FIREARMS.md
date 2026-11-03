@@ -31,6 +31,17 @@ thread at every reload and start, which with 100 000 frame files freezes the ser
 | Sneak | tighter spread, like aiming |
 | Right-click with a magazine | fill it from loose rounds |
 | Left-click with a grenade | unpin and throw |
+- `/firearms mode`: switch a `semi,auto` gun between auto and semi (right-click aims since 0.19).
+
+
+## Viewmodel (0.26)
+
+`/viewmodel offset <right> <up> <forward>`, `/viewmodel fov <40-110>` (60 = stock; higher = a smaller, further
+gun, like Counter-Strike's viewmodel_fov), `/viewmodel scale <0.3-2>`, `/viewmodel reset`, `/viewmodel show`, and
+with a gun id first (`/viewmodel rifle offset 0.2 0 0`) for that gun only. The setting is the player's own, saved in
+`viewmodels.yml`, and applied at once, without any pack change, because the display rig computes the placement
+per player. A frame-mode gun cannot follow it: its placement is baked into the pack for everybody (`/firearms pose`
+changes that for all, with a rebuild). Put the guns that should be adjustable into display mode.
 
 ## Commands
 
@@ -129,6 +140,8 @@ the thing to send along with the model file.
 
 | Symptom | Cause and fix |
 | --- | --- |
+| why the invisible barrier for holding the trigger | the Minecraft client reports a held left button only while it is mining a block under the crosshair (clicking air or an entity sends one swing per press, holding sends nothing more - checked in the client: attacks happen on key presses, only block mining repeats). A client-side, unbreakable barrier kept ahead on the crosshair ray is therefore the only vanilla way to know the button is still down. Everything about it is tunable under `hold:` in config.yml; set `hold.distance: 0` for tap-fire only |
+| an auto rifle fires one shot per click | guns.yml `fire-mode: "semi,auto"`: since right-click became aiming (0.19) such guns were read as semi; since 0.26 they are AUTO, and `/firearms mode` toggles the held gun between auto and semi |
 | "update did nothing" | an older Firearms jar is still in `plugins/`; delete it and restart |
 | every model purple | one bad item file rejects the whole items definition; run `/firearms check` and fix the warnings |
 | a frame is purple while firing | the pack players hold is older than the server's animation index; run `/firearms pack` and let it re-send |

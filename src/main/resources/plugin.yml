@@ -13,6 +13,9 @@ commands:
       /firearms give <gun|mag|ammo id> [amount] [player]
       /firearms pack
       /firearms reload
+  viewmodel:
+    description: Your own first-person gun placement (offset, fov, scale) - display-mode guns, applied at once
+    usage: /viewmodel [gun] offset <right> <up> <forward> | fov <n> | scale <n> | reset | show
 permissions:
   firearms.use:
     default: true

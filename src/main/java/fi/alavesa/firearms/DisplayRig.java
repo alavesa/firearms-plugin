@@ -37,7 +37,7 @@ final class DisplayRig {
         float[][] current;                                 // the pose being shown
         double[][][] lastSent;                             // per part: last transform sent (null = hidden)
         String clip; int frame = -1; double stretch = 1; int startTick; Runnable then;
-        boolean aiming;
+        boolean aiming, spawned;
         double lastPitch = 1e9; boolean lastSneak;
     }
 
@@ -107,6 +107,7 @@ final class DisplayRig {
             send(p, a, 0, true);
             for (NmsDisplay.Part pt : real) NmsDisplay.spawn(p, pt);
             NmsDisplay.ride(p, real);
+            a.spawned = true;
             active.put(p.getUniqueId(), a);
         } catch (Exception e) {
             plugin.getLogger().warning("Display rig for " + p.getName() + " failed: " + e);
@@ -132,6 +133,9 @@ final class DisplayRig {
         a.current = frames.get(0);
         send(p, a, 1, false);
     }
+
+    /** Re-send every part with the current settings (after /viewmodel). */
+    void refresh(Player p) { Active a = active.get(p.getUniqueId()); if (a != null) send(p, a, 2, true); }
 
     void stopClip(Player p) { Active a = active.get(p.getUniqueId()); if (a != null) { a.clip = null; a.then = null; } }
     void aim(Player p, boolean on) { Active a = active.get(p.getUniqueId()); if (a != null) a.aiming = on; }
@@ -174,7 +178,7 @@ final class DisplayRig {
         if (!all && duration == 0 && !cameraMoved) return;
         a.lastPitch = pitch; a.lastSneak = sneak;
         double[][] offC = eyeOffsetInCamera(pitch, sneak);
-        double[][] hand = handChain(a.poses);
+        double[][] hand = handChain(a.poses, plugin.viewmodels() != null ? plugin.viewmodels().of(p, a.gun.id()) : new Viewmodels.Setting());
         for (int i = 0; i < a.parts.size(); i++) {
             NmsDisplay.Part part = a.parts.get(i);
             if (part == null) continue;
@@ -184,7 +188,7 @@ final class DisplayRig {
             else tf = transformFor(a.poses, i, m, hand, offC);
             if (!all && same(tf, a.lastSent[i])) continue;
             a.lastSent[i] = tf;
-            try { NmsDisplay.transform(part, tf, cameraMoved && duration == 0 ? 1 : duration); if (!all) NmsDisplay.update(p, part); }
+            try { NmsDisplay.transform(part, tf, cameraMoved && duration == 0 ? 1 : duration); if (!all || a.spawned) NmsDisplay.update(p, part); }
             catch (Exception e) { plugin.getLogger().warning("Display rig update failed: " + e); }
         }
     }
@@ -192,10 +196,13 @@ final class DisplayRig {
     // ---------------------------------------------------------------- the maths
 
     /** T(hand) T(tr/16) R(rot) S(sc) T(-0.5): the gun's own first-person transform, then vanilla's hand placement. */
-    private double[][] handChain(ModelPoses mp) {
+    private double[][] handChain(ModelPoses mp, Viewmodels.Setting vm) {
         double[] h = list3("display.rig.hand", new double[]{0.56, -0.52, -0.72});
         double[] extra = list3("display.rig.offset", new double[]{0, 0, 0});
-        double[][] t = translate(h[0] + extra[0], h[1] + extra[1], h[2] + extra[2]);
+        // the player's own viewmodel: offset (right, up, forward -> view -z), and fov/scale as a zoom of the whole
+        // view-space placement about the camera (Counter-Strike's viewmodel_fov: higher = smaller, further gun)
+        double zoom = vm.scale * (60.0 / Math.max(1, vm.fov));
+        double[][] t = mul(scale(zoom, zoom, zoom), translate(h[0] + extra[0] + vm.x, h[1] + extra[1] + vm.y, h[2] + extra[2] - vm.z));
         double[][] tr = translate(mp.fpTranslation[0] / 16, mp.fpTranslation[1] / 16, mp.fpTranslation[2] / 16);
         double[][] r = rotXYZ(mp.fpRotation);
         double[][] sc = scale(mp.fpScale[0], mp.fpScale[1], mp.fpScale[2]);
