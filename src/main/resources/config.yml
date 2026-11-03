@@ -233,8 +233,15 @@ accuracy:
 
 # ---- First-person animations (frames generated from .bbmodel animations by /firearms pack) ----
 anim:
-  # composite (default): every animated group is its own sub-model with an EXACT display transform per frame -
-  #   no 22.5 degree rounding at all. baked: the older single-model mode (rotations rounded to 22.5 steps).
+  # composite (default): every animated group is its own sub-model with an EXACT display transform per frame
+  #   (frames in the pack, 20 per second at most, shown by swapping the held item's model).
+  # display: the first-person gun is a RIG of client-side item_display entities (one per part) riding the player and
+  #   billboarded to the camera; the client interpolates every pose change itself, so the animation is as smooth as
+  #   the player's frame rate, and the pack holds only the part geometry (no frames, tiny pack, no client memory
+  #   problem). Hands with the player's skin work the same way. Trade-offs: the gun is a world entity, so it clips
+  #   into walls you stand against, scales with the FOV setting, shows in F5, and costs one packet per moving part
+  #   per tick. Per gun: guns.yml  anim: { mode: display }. Tune display.rig below. Needs a client to judge.
+  # baked: the older single-model mode (rotations rounded to 22.5 steps).
   mode: composite
   frame-ticks: 1         # ticks between sampled frames (1 = one frame per server tick, the most the client can be shown)
   max-frames: 200        # cap per clip (per gun: guns.yml anim.max-frames); a capped clip is reported by /firearms pack
@@ -249,8 +256,6 @@ anim:
   fps:
     default: 20
     inspect: 10
-    reload: 15
-    equip: 15
   # Which animation NAMES in the .bbmodel mean which clip (exact name first, then "contains"). Add your own words,
   # e.g. "rel" for reload. Per gun: guns.yml anim-names: with the same layout.
   names:
@@ -274,6 +279,16 @@ anim:
   # position-sign: [-1, 1, 1]
   root-rotation-sign: [1, 1, 1]   # (baked mode only) extra flips for the whole-gun motion
   root-position-sign: [1, 1, 1]
+
+# ---- Display rig (anim.mode: display) ----
+display:
+  rig:
+    hand: [0.56, -0.52, -0.72]   # where vanilla draws a first-person item, in view space (right, up, back) - do not touch
+    offset: [0, 0, 0]            # extra view-space nudge for the whole rig (blocks): right, up, back
+    eye-offset: 0.18             # the rig rides at the player's passenger point, this much above the eyes (standing)
+    eye-offset-sneak: 0.23       # ... and while sneaking
+    aim-ticks: 3                 # ticks the client blends into / out of the aim pose
+    view-range: 1.0
 
 # ---- Third person ----
 # Every gun frame carries its pose as per-part (bone) display rotations, and those exist only in the first-person

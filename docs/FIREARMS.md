@@ -80,6 +80,11 @@ them as one file per distinct part pose, holds unchanged frames and samples insp
 (`anim.fps`), which brought the team's rifle+shotgun pack from 227 MB to 42 MB as is and 21 MB with the per-gun skip and hide
 lists below (ANIMATIONS.md explains).
 
+Two first-person modes (`anim.mode`, per gun `anim: { mode: ... }`): `composite` swaps baked frames of the held item
+(works like vanilla, 20 fps at most, every frame costs client memory); `display` draws the gun as a rig of
+client-side item_display entities that the client interpolates itself (smooth at any frame rate, tiny pack, but a
+world entity: clips into walls, scales with FOV, visible in F5 to the player). ANIMATIONS.md has the details.
+
 Gun packs converted from other systems (TaCZ and the like) carry every attachment variant and every fire-mode
 variant of each animation. Per gun in guns.yml: `hide-groups: [mag_extended_1, stock_folded*]` leaves groups
 out (the pack report lists them), `skip-animations: ["*_semi*"]` leaves animations out, and an animation named

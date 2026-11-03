@@ -232,3 +232,33 @@ What only you can decide, per gun in guns.yml, because it changes what is in the
 
 Measured: the three guns as sent, 4.0 million quads (~770 MB); with the skip and hide lists above, about half of that.
 A client with 4 GB handles the latter; keep below about 1.5 million for 2 GB clients.
+
+## Display mode (0.25) - smooth first person without frames
+
+`anim.mode: display` (or per gun `anim: { mode: display }`) draws the first-person gun as a **rig of client-side
+item_display entities**: one entity per part, riding the player and billboarded to the camera, so the client places
+them in front of the eyes itself every frame. Every pose change is sent as a transformation with an interpolation
+duration of one tick, and the client blends between poses at its own frame rate: a 60 fps client sees 60 fps motion,
+not 20 swapped frames. The pack then holds only the part geometry (one model per part, for the pistol nine
+files) - no frames, no client-memory problem, no 20 fps ceiling. Nothing else changes: the same `.bbmodel`, the
+same clip names, variants, sounds, aiming, hands with the player's skin (each hand part is an entity carrying
+the holder's colours).
+
+What the rig cannot do, because the gun becomes a world entity instead of the held item:
+
+- it is drawn in the world, so it clips into a wall you stand against (the vanilla hand draws over the world);
+- it scales with the FOV setting and the sprint FOV change (the vanilla hand uses a fixed 70);
+- the player sees it floating in front of the third-person camera in F5 (nobody else ever sees it);
+- every moving part is one packet per tick to that player (a 128-part rifle reloading = 128 small packets a
+  tick); looking up and down also moves every part, because the rig rides at the player's passenger point,
+  0.18 blocks above the eyes, and that offset is corrected per tick.
+
+The placement reproduces vanilla's first-person chain (the gun's `firstperson_righthand` display, then the hand
+position 0.56 right, 0.52 down, 0.72 forward) and was derived from the 26.3 client code, but it has not been seen
+on a real client yet: `display.rig.offset` in config.yml nudges the whole rig (right, up, back, in blocks),
+`display.rig.eye-offset` the vertical correction. Try it on one gun first.
+
+Is this what CounterMine does? Nothing public says how CounterMine 2 animates its guns; its listing says the server
+needs no mods but also offers an "optional mod pack". Display entities are the only vanilla mechanism that gives
+interpolated motion, so if their first person is smooth on an unmodded client, it is this or a frame rate the
+client cannot show. Both of Firearms' modes are available per gun, so the team can compare.

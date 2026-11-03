@@ -104,7 +104,7 @@ public final class FirearmsCommand implements CommandExecutor, TabCompleter {
             case "reload" -> {
                 if (!sender.hasPermission("firearms.admin")) return deny(sender);
                 plugin.reloadConfig();
-                plugin.registry.load();
+                plugin.registry.load(); plugin.rig.load();
                 plugin.ballistics.load();
                 sender.sendMessage(Component.text("Firearms reloaded.", NamedTextColor.GREEN));
                 return true;
@@ -135,7 +135,7 @@ public final class FirearmsCommand implements CommandExecutor, TabCompleter {
                             plugin.getLogger().warning("Pack generation failed: " + e);
                             return;
                         }
-                        if (!dry) { plugin.registry.load(); plugin.packHost.sendAll(); }
+                        if (!dry) { plugin.registry.load(); plugin.rig.load(); plugin.packHost.sendAll(); }
                         sender.sendMessage(Component.text((dry ? "Check done" : "Pack written: " + res.zip().getPath()) + "  (" + res.millis() + " ms, " + (res.bytes() / 1024) + " KB uncompressed)", NamedTextColor.GREEN));
                         sender.sendMessage(Component.text(res.models() + " .bbmodel converted, " + res.frames() + " animation frames baked, "
                             + res.placeholders() + " placeholder model(s)", NamedTextColor.GRAY));
@@ -195,7 +195,7 @@ public final class FirearmsCommand implements CommandExecutor, TabCompleter {
             }
         } catch (NumberFormatException ex) { sender.sendMessage(Component.text("Numbers please: " + ex.getMessage(), NamedTextColor.RED)); return true; }
         try { y.save(gf); } catch (java.io.IOException ex) { sender.sendMessage(Component.text("Could not write guns.yml: " + ex.getMessage(), NamedTextColor.RED)); return true; }
-        plugin.registry.load();
+        plugin.registry.load(); plugin.rig.load();
         sender.sendMessage(Component.text(g.id() + " " + ctx + ": offset " + fmt(tr) + "  rotate " + fmt(rot) + "  scale " + fmt(sc) + "  -> saved to guns.yml (display." + String.join(" + ", keys) + "); rebuilding the pack", NamedTextColor.GREEN));
         buildPack(sender, false);
         return true;

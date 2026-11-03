@@ -41,6 +41,8 @@ public final class Registry {
     private final Map<String, Map<String, int[]>> frameStarts = new LinkedHashMap<>();
     /** model -> clip -> length in ticks. */
     private final Map<String, Map<String, Integer>> clipLengths = new LinkedHashMap<>();
+    /** models whose first person is the display rig (anim-index.yml <model>.display: true). */
+    private final java.util.Set<String> displayModels = new java.util.HashSet<>();
     /** model -> clip -> ["tick:sound", ...] from the .bbmodel sound keyframes. */
     private final Map<String, Map<String, List<String>>> animSounds = new LinkedHashMap<>();
     /** model -> clip key -> the animation's own name in the .bbmodel (for the empty / full / tactical keywords). */
@@ -68,7 +70,7 @@ public final class Registry {
     // ------------------------------------------------------------------ loading
 
     public void load() {
-        guns.clear(); mags.clear(); ammo.clear(); anims.clear(); frameStarts.clear(); clipLengths.clear(); vests.clear(); animSounds.clear(); grenades.clear(); clipNames.clear(); skinClassic.clear(); skinSlim.clear();
+        guns.clear(); mags.clear(); ammo.clear(); anims.clear(); frameStarts.clear(); clipLengths.clear(); displayModels.clear(); vests.clear(); animSounds.clear(); grenades.clear(); clipNames.clear(); skinClassic.clear(); skinSlim.clear();
         File grf = new File(plugin.getDataFolder(), "grenades.yml");
         if (!grf.exists()) plugin.saveResource("grenades.yml", false);
         ConfigurationSection grs = YamlConfiguration.loadConfiguration(grf).getConfigurationSection("grenades");
@@ -169,8 +171,9 @@ public final class Registry {
                 Map<String, List<String>> snd = new LinkedHashMap<>();
                 Map<String, String> names = new LinkedHashMap<>();
                 if (s.contains("skin-classic")) { skinClassic.put(model, pixels(s.getString("skin-classic", ""))); skinSlim.put(model, pixels(s.getString("skin-slim", ""))); }
+                if (s.getBoolean("display", false)) displayModels.add(model);
                 for (String clip : s.getKeys(false)) {
-                    if (clip.startsWith("skin-")) continue;
+                    if (clip.startsWith("skin-") || clip.equals("display")) continue;
                     clips.put(clip, new int[]{ s.getInt(clip + ".frames", 0), Math.max(1, s.getInt(clip + ".frame-ticks", 1)) });
                     if (s.contains(clip + ".frame-at")) { List<Integer> at = s.getIntegerList(clip + ".frame-at"); int[] fa = new int[at.size()]; for (int i = 0; i < fa.length; i++) fa[i] = at.get(i); starts.put(clip, fa); }
                     if (s.contains(clip + ".ticks")) lengths.put(clip, s.getInt(clip + ".ticks"));
@@ -334,6 +337,9 @@ public final class Registry {
         VariantPicker.Variant v = VariantPicker.pick(variants(model, clip), magazineEmpty, health);
         return v == null ? clip : v.key();
     }
+
+    /** Is this model's first person drawn by the display rig (anim.mode: display) rather than item frames? */
+    public boolean displayMode(String model) { return displayModels.contains(model); }
 
     /** Total length of a baked clip in ticks, or -1. */
     public int clipTicks(String model, String clip) {

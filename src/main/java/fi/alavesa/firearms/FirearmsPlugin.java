@@ -27,6 +27,8 @@ public final class FirearmsPlugin extends JavaPlugin {
 
     private HitAnimations hitAnimations;
     PackHost packHost;
+    DisplayRig rig;
+    public DisplayRig rig() { return rig; }
     public HitAnimations hitAnimations() { return hitAnimations; }
     public PackHost packHost() { return packHost; }
 
@@ -45,6 +47,8 @@ public final class FirearmsPlugin extends JavaPlugin {
         ballistics = new Ballistics(this, registry);
         hold = new HoldDetector(this, registry);
         casings = new Casings(this, registry);
+        rig = new DisplayRig(this, registry);
+        rig.load();
         controller = new FireController(this, registry, ballistics, casings);
         getServer().getPluginManager().registerEvents(controller, this);
         getServer().getScheduler().runTaskTimer(this, casings::tick, 1L, 1L);
@@ -53,6 +57,7 @@ public final class FirearmsPlugin extends JavaPlugin {
         getServer().getScheduler().runTaskTimer(this, grenades::tick, 1L, 1L);
         getServer().getScheduler().runTaskTimer(this, hold::tick, 1L, 1L);
         getServer().getScheduler().runTaskTimer(this, controller::tick, 1L, 1L);
+        getServer().getScheduler().runTaskTimer(this, rig::tick, 1L, 1L);
         getServer().getScheduler().runTaskTimer(this, hold::poll, 20L, 5L);
         getServer().getScheduler().runTaskTimer(this, ballistics::tick, 1L, 1L);
         FirearmsCommand cmd = new FirearmsCommand(this);
@@ -104,6 +109,7 @@ public final class FirearmsPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (rig != null) for (org.bukkit.entity.Player p : getServer().getOnlinePlayers()) rig.hide(p);
         if (packHost != null) packHost.stop();
         if (controller != null) controller.shutdown();
         if (hold != null) hold.clearAll();

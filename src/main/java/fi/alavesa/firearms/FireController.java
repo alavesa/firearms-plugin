@@ -450,6 +450,7 @@ public final class FireController implements Listener {
         cancelReload(p);
         exitAim(p, null, null, false);
         cancelClip(p);
+        plugin.rig().hide(p);
         ItemStack next = p.getInventory().getItem(event.getNewSlot());
         GunType gun = registry.gunOf(next);
         if (gun == null) return;
@@ -458,6 +459,7 @@ public final class FireController implements Listener {
             if (registry.gunOf(held) == gun) {
                 clearOffhand(p);
                 refreshArms(p);
+                if (registry.displayMode(gun.model())) plugin.rig().show(p, gun, p.getInventory().getItem(event.getNewSlot()));
                 boolean customEquip = gun.equipSound() != null && !gun.equipSound().isEmpty();
                 p.playSound(p.getLocation(), customEquip ? gun.equipSound() : "minecraft:item.armor.equip_chain", customEquip ? 1f : 0.5f, customEquip ? 1f : 1.5f);
                 int[] a = registry.anim(gun.model(), "equip");
@@ -470,6 +472,7 @@ public final class FireController implements Listener {
 
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
+        plugin.rig().hide(event.getPlayer());
         cancelReload(event.getPlayer());
         exitAim(event.getPlayer(), null, null, false);
         cancelClip(event.getPlayer());
@@ -491,7 +494,11 @@ public final class FireController implements Listener {
     /** Every tick: release the sight when the right-click stream stopped; keep the client-side aim pose fresh. */
     public void tick() {
         int now = plugin.getServer().getCurrentTick();
-        for (Player pl : plugin.getServer().getOnlinePlayers()) if (registry.gunOf(pl.getInventory().getItemInMainHand()) != null) lastPos.put(pl.getUniqueId(), pl.getLocation().toVector()); else lastPos.remove(pl.getUniqueId());
+        for (Player pl : plugin.getServer().getOnlinePlayers()) {
+            GunType held = registry.gunOf(pl.getInventory().getItemInMainHand());
+            if (held != null) lastPos.put(pl.getUniqueId(), pl.getLocation().toVector()); else lastPos.remove(pl.getUniqueId());
+            if (held != null && registry.displayMode(held.model()) && !plugin.rig().showing(pl)) plugin.rig().show(pl, held, pl.getInventory().getItemInMainHand());   // given / joined holding it
+        }
         int timeout = plugin.getConfig().getInt("aim.hold-timeout-ticks", 7);
         for (UUID id : new ArrayList<>(aiming)) {
             Player p = plugin.getServer().getPlayer(id);
@@ -524,6 +531,7 @@ public final class FireController implements Listener {
     /** The aiming pose: the same gun item with the model "<model>_aim_1" (one baked pose, no frames), shown only
      *  to this client; the server's inventory keeps the rest model. Nothing happens for a gun without an aim clip. */
     private void sendAimView(Player p, GunType gun, ItemStack item) {
+        if (registry.displayMode(gun.model())) { plugin.rig().aim(p, true); return; }
         if (registry.anim(gun.model(), "aim") == null || !NmsAimView.available()) return;
         ItemStack shown = item.clone();
         registry.setModel(shown, gun.model() + "_aim_1");
@@ -535,6 +543,7 @@ public final class FireController implements Listener {
         UUID id = p.getUniqueId();
         if (!aiming.remove(id)) return;
         aimSeen.remove(id);
+        plugin.rig().aim(p, false);
         var attr = p.getAttribute(org.bukkit.attribute.Attribute.MOVEMENT_SPEED);
         if (attr != null && attr.getModifier(aimKey) != null) attr.removeModifier(aimKey);
         p.updateInventory();   // drops the client-side aim pose
@@ -552,6 +561,7 @@ public final class FireController implements Listener {
     private void playClip(Player p, GunType gun, ItemStack item, String clip, int totalTicks, Runnable then) {
         int[] a = registry.anim(gun.model(), clip);
         if (a == null) { if (then != null) then.run(); return; }
+        if (registry.displayMode(gun.model())) { playOnRig(p, gun, item, clip, totalTicks, then); return; }
         // When each frame starts: the pack's own schedule (frames that did not change were not written, so the
         // previous one holds), else evenly spaced. totalTicks > 0 stretches the whole schedule to that length.
         int length = Math.max(1, registry.clipTicks(gun.model(), clip));
@@ -592,6 +602,34 @@ public final class FireController implements Listener {
         animTasks.put(p.getUniqueId(), tasks);
     }
 
+    /** Display mode: the rig plays the clip (one pose per tick, blended by the client); the sound keyframes and the
+     *  end-of-clip bookkeeping stay here so reloads, aiming and cancelling work exactly as with frames. */
+    private void playOnRig(Player p, GunType gun, ItemStack item, String clip, int totalTicks, Runnable then) {
+        int length = Math.max(1, registry.clipTicks(gun.model(), clip));
+        double stretch = totalTicks > 0 ? (double) totalTicks / length : 1.0;
+        final int holdUntil = Math.max(totalTicks, (int) Math.round(length * stretch));
+        cancelClip(p);
+        if (!plugin.rig().showing(p)) plugin.rig().show(p, gun, item);
+        int slot = p.getInventory().getHeldItemSlot();
+        String uid = uid(item);
+        List<BukkitTask> tasks = new ArrayList<>();
+        plugin.rig().play(p, clip, totalTicks, null);
+        for (String snd : registry.animSounds(gun.model(), clip)) {
+            int colon = snd.indexOf(':');
+            if (colon <= 0) continue;
+            long sndAt; try { sndAt = Long.parseLong(snd.substring(0, colon)); } catch (NumberFormatException e) { continue; }
+            String id = snd.substring(colon + 1);
+            tasks.add(plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+                if (p.isOnline() && uid.equals(uid(p.getInventory().getItem(slot)))) p.getWorld().playSound(p.getLocation(), id, 1f, 1f);
+            }, Math.round(sndAt * stretch)));
+        }
+        tasks.add(plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+            animTasks.remove(p.getUniqueId());
+            if (then != null) then.run();
+        }, holdUntil));
+        animTasks.put(p.getUniqueId(), tasks);
+    }
+
     /** Put the player's skin colours on every gun they carry (the first-person arms). Safe to call often. */
     public void refreshArms(Player p) {
         if (!ArmSkin.ready(p.getUniqueId())) { ArmSkin.load(plugin, p, () -> refreshArms(p)); return; }
@@ -618,6 +656,7 @@ public final class FireController implements Listener {
     }
 
     private void cancelClip(Player p) {
+        plugin.rig().stopClip(p);
         List<BukkitTask> t = animTasks.remove(p.getUniqueId());
         if (t == null) return;
         t.forEach(BukkitTask::cancel);

@@ -1,40 +1,54 @@
-# Firearms – hands with the player's own skin
+# Firearms – hands in the gun model, painted with the holder's skin
 
-Hands are modelled in the gun's .bbmodel like any other part, so they move with your animations. The plugin paints them with the skin of whoever holds the gun, using one resource pack for everyone: every skin-textured face is turned into one quad per skin pixel, each quad is tinted, and the plugin writes the holder's skin colours into the gun item (`custom_model_data.colors`). Players with a slim (Alex) skin automatically get the slim hand variant.
+The hands are part of the gun's `.bbmodel`, so they move with your animations. The plugin paints them with the
+skin of **whoever holds the gun**: every skin-textured face is cut into one quad per skin pixel, each quad is
+tinted, and the plugin writes the holder's skin colours into the gun item (`custom_model_data` colours) when the
+gun is drawn or the player joins. One pack serves every player. Players with a slim (Alex) skin get the slim
+hand variant automatically when the model has one.
 
-## 1. Model the hands
+Hands exist **only in first person**: third person, the ground, item frames and the inventory show the gun
+without them. That is true in both animation modes (frames and the display rig).
 
-1. Add a 64x64 skin texture to the Blockbench project, for example BetterModel's `-steve_template` or any Steve/Alex skin. Its **name must contain** one of: `skin`, `steve`, `alex`, `player`, `template` (configurable: `hands.texture-keywords` in config.yml).
-2. Make the hand/arm cubes inside groups whose names contain `hand` or `arm` (configurable: `hands.group-keywords`), e.g. `righthand`, `left_arm`, `hands`.
-3. UV-map each visible face of those cubes onto the skin texture exactly where that arm face lives in a normal skin (right arm front = x 44–48, y 20–32, etc.). Any size works: a 4x12 face gives 48 pixel quads, a 2x6 face gives 12.
-4. Faces of a hand cube that use another texture (a glove, a sleeve) are kept as-is; only the skin-textured faces are converted.
-5. Animate the hand groups together with the gun (reload, pump, inspect…). The quads follow the group.
+## 1. Modelling
 
-Transparent pixels in the template become holes (no quad), so you can cut shapes with the template's alpha.
+1. Add a skin texture to the Blockbench project: any 64x64 Steve or Alex skin, or a template. Its **name must
+   contain** one of `skin`, `steve`, `alex`, `player`, `template` (`hands.texture-keywords` in config.yml).
+   A gun whose only texture is the gun texture has no hands - TaCZ exports, for example, keep empty `lefthand` /
+   `righthand` groups because the mod drew the arms itself.
+2. Put the hand and arm cubes in groups whose names contain `hand` or `arm` (`hands.group-keywords`):
+   `righthand`, `left_arm`, `hands` all work. Cubes in those groups whose faces use the skin texture become
+   skin pixels; faces on another texture (a glove, a sleeve) stay as they are.
+3. UV-map each visible face onto the place of that arm face in a normal skin: right arm outer side = x 40-44,
+   front = 44-48, inner = 48-52, back = 52-56, y 20-32; left arm at x 32-40, y 52-64. A 4x12 face becomes
+   48 pixel quads, a 2x6 face 12. Transparent template pixels become holes.
+4. Keep the hands in the animated groups that should move them (reload, pump, inspect, draw).
 
 ## 2. Slim arms
 
-Make a second hand group whose name contains `slim`, e.g. `righthand_slim`, with the 3-pixel-wide arm cubes, placed inside the normal 4-wide hand. Map its faces onto the slim arm area of the skin (right arm front = x 44–47).
+Add a second group whose name contains `slim` (`righthand_slim`) holding the 3-pixel-wide arm, mapped onto the
+slim arm area (right arm front = x 44-47). The converter writes a classic and a slim variant; the plugin sets
+flag 0 on the gun item from the holder's profile and the pack picks the variant. Without a slim group, slim
+players get the classic hands.
 
-The converter writes two first-person variants of every frame:
+## 3. What the plugin does
 
-- classic – all non-slim hand groups, slim groups hidden;
-- slim – all `*slim*` hand groups, non-slim hand groups hidden.
-
-The plugin reads the holder's skin model from their profile and sets flag 0 on the gun item, which selects the variant in the pack (`minecraft:condition` on `custom_model_data` flag 0). Without a slim group, slim players simply get the classic hands.
-
-## 3. What the plugin does with it
-
-- When a player takes a gun out (or joins), their skin is fetched from their profile (Steve colours if it cannot be fetched, e.g. offline-mode) and written into every gun they carry: the colour list in the generated pixel order and the slim flag.
-- Third person and the inventory icon never show the hands: other players see the plain gun, the GUI shows the label card.
-- The pixel order per model is stored in `plugins/Firearms/models/anim-index.yml` (`skin-classic` / `skin-slim`); it is regenerated by `/firearms pack`, so re-run it after changing the hands.
+- On join and whenever a gun is drawn, the holder's skin is fetched from their profile (offline-mode servers
+  get Steve colours) and written into every gun they carry: colour list in the pack's pixel order, slim flag.
+- The pixel order per model lives in `plugins/Firearms/models/anim-index.yml` (`skin-classic` / `skin-slim`),
+  regenerated by `/firearms pack` - run it after changing the hands, and re-give or re-draw the guns.
+- In display mode the hand parts are their own item_display entities carrying the same colours, so the skin
+  shows there too.
 
 ## 4. Checking
 
-`/firearms check` prints `<model>: hands with player skin - N classic / M slim skin pixels`. If it says `0`, the texture name or the group name did not match the keywords. If the hands are white in game, the skin fetch failed (offline-mode?) – Steve colours should still appear; a fully white hand means the pack is older than the index (re-upload).
+`/firearms check` or `/firearms pack` prints `<model>: hands with player skin - N classic / M slim skin pixels`.
+`0` means the texture name or the group name did not match the keywords. White hands in game mean the skin
+fetch failed (offline-mode gives Steve colours, so fully white = the players' pack is older than the index:
+rebuild and let it re-send).
 
-## 5. Limits
+## 5. Cost
 
-- Each skin pixel is a Java element; a full pair of arms is roughly 400 elements per frame. Keep `anim.max-frames` reasonable (40) and only model the faces you can see.
-- Hand group rotations follow the usual rule: multiples of 90° are exact, other angles are rounded to 22.5° steps.
-- The old generated arms (`arms.enabled`) are still there but off by default; a model with its own hands never gets them.
+Each skin pixel is a quad, baked by the client for every frame the hand appears in (see ANIMATIONS.md, *Client
+memory*): a pair of 4x12 arms with all faces visible is about 400 quads per frame. Model only the faces that
+can be seen from the camera (the back and inner faces of an arm never are), and prefer the display rig for
+guns with long animations - there the hands cost one entity each and nothing per frame.

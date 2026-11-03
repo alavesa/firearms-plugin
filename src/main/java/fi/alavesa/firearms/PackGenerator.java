@@ -61,6 +61,18 @@ public final class PackGenerator {
     private int heldFrames;                                                                             // sampled frames identical to the previous one (not written)
     private final Map<String, Long> quadsPerModel = new LinkedHashMap<>();                               // model -> quads the CLIENT bakes (every distinct part pose bakes its geometry again)
     private int zeroUvFacesDropped, hiddenFacesDropped;
+    /** Display mode: model -> its poses (every tick of every clip) for the client-side item_display rig; written to models/poses.bin. */
+    private final Map<String, DisplayPoses> displayPoses = new LinkedHashMap<>();
+    private final java.util.Set<String> displayGuns = new java.util.HashSet<>();                          // cmd strings whose first-person model is EMPTY (the rig draws the gun)
+    private final Map<String, List<Integer>> cmdTints = new LinkedHashMap<>();                           // part geometry cmd -> tint indices (skin hands)
+
+    static final class DisplayPoses {
+        final List<String> partCmd = new ArrayList<>(); final List<Integer> partVariant = new ArrayList<>();
+        final List<Double> partK = new ArrayList<>(); final List<double[]> partPivot = new ArrayList<>();
+        double[] fpRotation = {0, 0, 0}, fpTranslation = {0, 0, 0}, fpScale = {1, 1, 1};   // the gun's first-person display (no crossbow compensation)
+        float[][] rest;                                   // part -> 12 floats (3x4 of M in gun px), or null = hidden
+        final Map<String, List<float[][]>> clips = new LinkedHashMap<>();   // clip key -> frames (one per tick) -> part -> 12 floats / null
+    }
     /** Clip keys the plugin can play; animations mapping to anything else are not baked (anim.bake-unknown: true bakes them anyway). */
     private static final java.util.Set<String> KNOWN_CLIPS = java.util.Set.of("fire", "reload", "equip", "pump", "inspect", "aim", "unpin", "throw");
     private final Map<String, Map<String, String>> clipNameIndex = new LinkedHashMap<>();   // model -> clip key -> animation name
@@ -207,6 +219,7 @@ public final class PackGenerator {
             if (sm != null && sm.containsKey(c.getKey())) idx.set(m.getKey() + "." + c.getKey() + ".sounds", sm.get(c.getKey()));
         }
         for (var e : skinOrder.entrySet()) { idx.set(e.getKey() + ".skin-classic", e.getValue()[0]); idx.set(e.getKey() + ".skin-slim", e.getValue()[1]); }
+        for (String g : displayGuns) idx.set(g + ".display", true);
         List<String> dedup = new ArrayList<>(new LinkedHashSet<>(warnings));   // the same cube is baked per variant
         warnings.clear(); warnings.addAll(dedup);
         File zip = new File(plugin.getDataFolder(), "Firearms-pack.zip");
@@ -228,7 +241,9 @@ public final class PackGenerator {
                 }
             }
             Files.move(tmp.toPath(), zip.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            for (String g : displayGuns) idx.set(g + ".display", true);
             idx.save(new File(dir, "anim-index.yml"));
+            writePosesFile(dir);
             notes.add("zip: " + files.size() + " files written in " + (System.currentTimeMillis() - t0 - tModels - tItems) + " ms");
         }
         return new Result(models, frames, placeholders, warnings, zip, bytes, biggest, System.currentTimeMillis() - t0, notes);
@@ -268,16 +283,19 @@ public final class PackGenerator {
             String fp = fpVariant.get(e.getKey());
             String icon = iconOf.get(e.getKey());
             List<List<Object[]>> cp = compositeParts.get(e.getKey());
-            if (cp != null) {
+            if (cp != null && !displayGuns.contains(e.getKey())) {
                 JsonObject plainM = compositeJson(cp.get(0));
                 JsonObject sel = new JsonObject();
                 sel.addProperty("type", "minecraft:select");
                 sel.addProperty("property", "minecraft:display_context");
                 JsonArray sc = new JsonArray();
+                // The first-person entry is written whenever its part list is not the third-person one (every frame:
+                // the frames exist only in first person), hands or not. 0.24 tied this to the hands flag and so every
+                // frame showed the rest pose - "all animations removed".
                 boolean handsHere = cp.size() > 3 && !cp.get(3).isEmpty();
-                if (handsHere) {
+                if (handsHere || cp.get(1) != cp.get(0)) {
                     JsonObject fpm;
-                    if (cp.get(2) != cp.get(1)) {
+                    if (handsHere && cp.get(2) != cp.get(1)) {
                         fpm = new JsonObject();
                         fpm.addProperty("type", "minecraft:condition");
                         fpm.addProperty("property", "minecraft:custom_model_data");
@@ -301,6 +319,42 @@ public final class PackGenerator {
                 String problem = caseProblem(c);
                 if (problem != null) { written.remove(e.getKey()); warnings.add("case '" + e.getKey() + "' left out of the items file: " + problem + " (one such case would make the client drop every gun)"); continue; }
                 report.add(base + ": \"" + e.getKey() + "\" -> composite of " + cp.get(0).size() + " part(s)" + (handsHere ? " + hands" : "") + (icon != null ? ", gui icon" : ""));
+                cases.add(c);
+                continue;
+            }
+            if (displayGuns.contains(e.getKey())) {
+                // display mode: nothing is drawn in first person by the item itself (the rig draws the gun); third person,
+                // GUI icon and the rest are the rest pose as usual
+                JsonObject sel = new JsonObject();
+                sel.addProperty("type", "minecraft:select");
+                sel.addProperty("property", "minecraft:display_context");
+                JsonArray sc = new JsonArray();
+                JsonObject fpCase = new JsonObject();
+                JsonArray when = new JsonArray(); when.add("firstperson_righthand"); when.add("firstperson_lefthand");
+                JsonObject empty = new JsonObject(); empty.addProperty("type", "minecraft:empty");
+                fpCase.add("when", when); fpCase.add("model", empty); sc.add(fpCase);
+                if (icon != null && files.containsKey("assets/" + NS + "/models/item/" + icon + ".json")) {
+                    JsonObject gc = new JsonObject(); gc.addProperty("when", "gui");
+                    JsonObject im = new JsonObject(); im.addProperty("type", "minecraft:model"); im.addProperty("model", NS + ":item/" + icon);
+                    gc.add("model", im); sc.add(gc);
+                }
+                sel.add("cases", sc);
+                sel.add("fallback", cp != null ? compositeJson(cp.get(0)) : m);
+                c.add("model", sel);
+                String problem = caseProblem(c);
+                if (problem != null) { written.remove(e.getKey()); warnings.add("case '" + e.getKey() + "' left out of the items file: " + problem); continue; }
+                report.add(base + ": \"" + e.getKey() + "\" -> display rig (empty in first person), rest pose elsewhere");
+                cases.add(c);
+                continue;
+            }
+            List<Integer> partTints = cmdTints.get(e.getKey());
+            if (partTints != null) {
+                c.add("model", tinted(e.getValue(), 0));
+                JsonArray ta = new JsonArray();
+                for (int g : partTints) { JsonObject t = new JsonObject(); t.addProperty("type", "minecraft:custom_model_data"); t.addProperty("index", g); t.addProperty("default", 0xC58C5E); ta.add(t); }
+                c.getAsJsonObject("model").add("tints", ta);
+                String problem = caseProblem(c);
+                if (problem != null) { written.remove(e.getKey()); warnings.add("case '" + e.getKey() + "' left out of the items file: " + problem); continue; }
                 cases.add(c);
                 continue;
             }
@@ -1173,8 +1227,9 @@ public final class PackGenerator {
                 display.add(key, transform(r, tr, sc));
             }
         }
+        JsonObject fpRaw = display.has("firstperson_righthand") ? display.getAsJsonObject("firstperson_righthand").deepCopy() : null;
         if (currentGun != null && registry.gunBase() == org.bukkit.Material.CROSSBOW && plugin.getConfig().getBoolean("display.crossbow-compensate", true))
-            compensateCrossbowPose(display);
+            { compensateCrossbowPose(display); }
         double[] flashAt = flashSpot(name, cubes);
 
         // --- rest model
@@ -1204,6 +1259,11 @@ public final class PackGenerator {
         List<Clip> clipList = new ArrayList<>();
         for (var pe : picked) clipList.add(pe.getValue());
         CompositeModel comp = composite ? new CompositeModel(name, mpath, cubes, cubesC, cubesS, bones, textures, display, texIndex, texRes, S, flashAt, handsOn, slimOn, hideGroups, base, clipList) : null;
+        // display mode: the first-person gun is a rig of client-side item_display entities (one per part, interpolated by
+        // the client); the pack then holds only the part geometry, no frames at all. Config anim.mode: display, or per gun.
+        String modeCfg = plugin.getConfig().getString("anim.mode", "composite");
+        if (currentGun != null && currentGun.animCfg() != null && currentGun.animCfg().contains("mode")) modeCfg = currentGun.animCfg().getString("mode", modeCfg);
+        final boolean displayMode = composite && "display".equalsIgnoreCase(modeCfg) && currentGun != null;
 
         // --- rest model
         if (composite) {
@@ -1221,6 +1281,11 @@ public final class PackGenerator {
             if (handsOn) handVariants(name, mpath, cubesC, cubesS, slimOn, bones, null, textures, texIndex, texRes, display, null, 0, S, null);
         }
 
+        if (displayMode) {
+            exportDisplayPoses(name, comp, picked, soundsOf, fpRaw);
+            report.add(name + ": DISPLAY mode - first person is a rig of " + comp.partCount() + " item_display part(s) interpolated by the client; no frames in the pack");
+            return;
+        }
         // --- frames. The server can change the held model once per tick, so a clip is sampled at 20 frames per
         // second at most (one per tick, plus the end pose); frames whose pose did not change from the previous one
         // are NOT written - the previous frame simply holds (frame-at in anim-index.yml says when each one starts).
@@ -1240,7 +1305,7 @@ public final class PackGenerator {
             String baseKey = key.replaceAll("_\\d+$", "");
             double fps = plugin.getConfig().getDouble("anim.fps.default", 20);
             if (plugin.getConfig().contains("anim.fps." + baseKey)) fps = plugin.getConfig().getDouble("anim.fps." + baseKey);
-            else if (!plugin.getConfig().contains("anim.fps.default")) fps = baseKey.equals("inspect") ? 10 : baseKey.equals("reload") || baseKey.equals("equip") ? 15 : 20;   // the shipped config.yml defaults, for older config files
+            else if (!plugin.getConfig().contains("anim.fps.default")) fps = baseKey.equals("inspect") ? 10 : 20;   // the shipped config.yml defaults, for older config files
             if (currentGun != null && currentGun.animCfg() != null && currentGun.animCfg().contains(baseKey + ".fps")) fps = currentGun.animCfg().getDouble(baseKey + ".fps");
             fps = Math.max(1, Math.min(20.0 / frameTicks, fps));
             int n = 0;
@@ -1295,6 +1360,66 @@ public final class PackGenerator {
     /** Which animation plays which clip: the best-scoring name per clip, except clips listed in anim.random-variants
      *  (reload by default), where EVERY matching animation is kept as a variant - reload, reload_2, reload_3 ... -
      *  and the plugin picks one at random each time. */
+    /** Display mode: every clip sampled once per tick (the client interpolates between ticks), the rest pose, the aim
+     *  pose; the part geometry is registered as items of its own ("<model>__g<suffix>") and the gun's own first-person
+     *  model becomes empty. Clips are still listed in anim-index.yml for their lengths and sounds. */
+    private void exportDisplayPoses(String name, CompositeModel comp, List<Map.Entry<String, Clip>> picked, Map<String, List<String>> soundsOf, JsonObject fpRaw) {
+        DisplayPoses dp = new DisplayPoses();
+        for (CompositeModel.Part part : comp.parts) {
+            comp.writeGeometry(part);
+            String cmd = name + "__g" + part.suffix;
+            dp.partCmd.add(cmd); dp.partVariant.add(part.variant); dp.partK.add(part.k); dp.partPivot.add(part.pivot.clone());
+            cmdToModel.put(cmd, part.geomPath());
+            if (!part.tints.isEmpty()) cmdTints.put(cmd, new ArrayList<>(part.tints));
+        }
+        if (fpRaw != null) { dp.fpRotation = vec(fpRaw.get("rotation")); dp.fpTranslation = vec(fpRaw.get("translation")); dp.fpScale = fpRaw.has("scale") ? vec(fpRaw.get("scale")) : new double[]{1, 1, 1}; }
+        dp.rest = comp.matrices(null, 0, false);
+        displayGuns.add(name);
+        Map<String, int[]> clips = new LinkedHashMap<>();
+        int flashFrames = Math.max(0, plugin.getConfig().getInt("flash.frames", 1));
+        for (var pe : picked) {
+            String key = pe.getKey(); Clip clip = pe.getValue();
+            if (clips.containsKey(key)) continue;
+            clipNameIndex.computeIfAbsent(name, x -> new LinkedHashMap<>()).put(key, clip.name);
+            int ticksTotal = Math.max(1, (int) Math.round(clip.length * 20.0));
+            List<float[][]> frames = new ArrayList<>();
+            if (key.equals("aim")) frames.add(comp.matrices(clip, clip.length, false));
+            else for (int tick = 0; tick <= ticksTotal; tick++) frames.add(comp.matrices(clip, Math.min(clip.length, tick / 20.0), key.equals("fire") && tick < flashFrames));
+            dp.clips.put(key, frames);
+            clips.put(key, new int[]{frames.size(), ticksTotal});
+            List<String> clipSounds = soundsOf.getOrDefault(key, List.of());
+            if (!clipSounds.isEmpty()) clipSoundIndex.computeIfAbsent(name, x -> new LinkedHashMap<>()).put(key, clipSounds);
+        }
+        animIndex.put(name, clips);
+        displayPoses.put(name, dp);
+        StringBuilder sb = new StringBuilder(name + " clips (display rig):");
+        for (var ce : clips.entrySet()) sb.append(' ').append(ce.getKey()).append('(').append(ce.getValue()[1]).append(" ticks)");
+        notes.add(sb.toString());
+    }
+
+    /** models/poses.bin: the display rig's data. */
+    private void writePosesFile(File dir) throws IOException {
+        File f = new File(dir, "poses.bin");
+        if (displayPoses.isEmpty()) { f.delete(); return; }
+        try (java.io.DataOutputStream out = new java.io.DataOutputStream(new java.io.BufferedOutputStream(new java.io.FileOutputStream(f), 1 << 16))) {
+            out.writeUTF("FPOSES1");
+            out.writeInt(displayPoses.size());
+            for (var e : displayPoses.entrySet()) {
+                DisplayPoses dp = e.getValue();
+                out.writeUTF(e.getKey());
+                out.writeInt(dp.partCmd.size());
+                for (int i = 0; i < dp.partCmd.size(); i++) { out.writeUTF(dp.partCmd.get(i)); out.writeByte(dp.partVariant.get(i)); out.writeDouble(dp.partK.get(i)); for (double v : dp.partPivot.get(i)) out.writeDouble(v); }
+                for (double v : dp.fpRotation) out.writeDouble(v); for (double v : dp.fpTranslation) out.writeDouble(v); for (double v : dp.fpScale) out.writeDouble(v);
+                writeFrame(out, dp.rest);
+                out.writeInt(dp.clips.size());
+                for (var c : dp.clips.entrySet()) { out.writeUTF(c.getKey()); out.writeInt(c.getValue().size()); for (float[][] fr : c.getValue()) writeFrame(out, fr); }
+            }
+        }
+    }
+    private static void writeFrame(java.io.DataOutputStream out, float[][] frame) throws IOException {
+        for (float[] m : frame) { if (m == null) out.writeByte(0); else { out.writeByte(1); for (float v : m) out.writeFloat(v); } }
+    }
+
     private List<Map.Entry<String, JsonElement>> pickAnimations(String model, JsonArray anims) {
         java.util.Set<String> variantClips = new java.util.HashSet<>(lower(plugin.getConfig().getStringList("anim.random-variants")));
         variantClips.add("reload"); variantClips.add("inspect");   // always: the magazine / health rules depend on them
@@ -2000,6 +2125,25 @@ public final class PackGenerator {
         }
 
         int partCount() { return parts.size(); }
+
+        /** Every part's world matrix (gun px, 3x4 as 12 floats) at this pose, null = hidden (scaled away, or a flash
+         *  part off a flash frame). The rig applies the gun's first-person display and the hand placement itself. */
+        float[][] matrices(Clip clip, double t, boolean flashFrame) {
+            Map<Bone, double[][]> cache = new HashMap<>();
+            float[][] out = new float[parts.size()][];
+            for (int i = 0; i < parts.size(); i++) {
+                Part part = parts.get(i);
+                if ((part.variant == 3 || part.variant == 4) && !flashFrame) continue;
+                double[][] M = mul(world(part.bone, clip, t, cache), part.extra);
+                double[] sc = new double[3];
+                for (int j = 0; j < 3; j++) sc[j] = Math.sqrt(M[0][j]*M[0][j] + M[1][j]*M[1][j] + M[2][j]*M[2][j]);
+                if (sc[0] < 0.01 || sc[1] < 0.01 || sc[2] < 0.01) continue;
+                float[] m = new float[12];
+                for (int r = 0; r < 3; r++) for (int c = 0; c < 4; c++) m[r * 4 + c] = (float) M[r][c];
+                out[i] = m;
+            }
+            return out;
+        }
 
         /** Self-check: every cube corner, placed by the EMITTED representation (part-local geometry + the part's
          *  display transform), must land where Blockbench puts it (the cube's own bone chain + its own rotation).
