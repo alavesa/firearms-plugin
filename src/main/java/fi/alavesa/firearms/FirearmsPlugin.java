@@ -98,7 +98,7 @@ public final class FirearmsPlugin extends JavaPlugin {
             for (GunType g : registry.guns()) { registry.buildGun(g); break; }
             getLogger().info("Components: swing-hide " + (Registry.swingOk ? "OK" : "unsupported") + ", adventure can_break "
                 + (Registry.canBreakOk ? "OK" : "unsupported") + "; packet recoil " + (NmsRecoil.available() ? "OK" : "fallback")
-                + "; post effects (flashbang) " + (PostEffects.available() ? "OK" : "unavailable - Blindness fallback") + "; display rig " + (NmsDisplay.available() ? "OK" : "unavailable: " + NmsDisplay.problem()));
+                + "; display rig " + (NmsDisplay.available() ? "OK" : "unavailable: " + NmsDisplay.problem()));
         }, 100L);
         // The #1 reason an update "did nothing": an older Firearms-x.y.z.jar left next to the new one. Paper
         // then loads only ONE of them (the first by name = the OLD one). Shout about it in the console and to ops.

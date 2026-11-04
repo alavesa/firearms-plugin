@@ -218,11 +218,14 @@ weight:
   speed-per-kg: 0.012    # walk-speed penalty per kg while the gun is held (3 kg = -3.6 %)
 
 # ---- Recoil ----
-# Camera shake: guns.yml `shake: <degrees>` adds random yaw/pitch jitter over these ticks that sums to zero (the view
-# wobbles and lands back where it was) on top of the kick. Every recoil here is the camera; the GUN's own kick is the
-# animation - or, for a `shader: true` gun, the core shader (see pack.shaders).
+# The kick is a SMOOTH camera movement, not a jolt: the shot's yaw/pitch is spread over kick-ticks with an
+# ease-in-out profile (small first step, biggest in the middle, small last - like the field-of-view easing when your
+# speed changes), then `recovery` of it drifts back over recovery-ticks the same way. Rotation packets only: no
+# teleport, no movement-speed change. guns.yml `shake: <degrees>` adds jitter over the kick that sums to zero.
 recoil:
-  ticks: 3               # the kick is spread over this many ticks (packet-driven, no teleports)
+  kick-ticks: 8          # the kick takes this many ticks (3 = the old sharp kick, 8 = smooth, 12 = lazy)
+  recovery: 0.5          # how much of the kick drifts back on its own (0 = none, 1 = all)
+  recovery-ticks: 12     # ... over this many ticks
   aim-multiplier: 0.5    # recoil while sneaking
 
 # ---- Knockback on the shooter ----
@@ -332,20 +335,13 @@ hit-animations:
     # legs_right: hit_legs_right
 
 # ---- Flashbang (grenades.yml kind: flash) ----
-# The white screen is a post effect from the pack (firearms:flash_1..flash_<levels>, built by /firearms pack), switched
-# per tick as it fades - the 26.3 per-player post-effect list, the same one /posteffect uses. Without post effects
-# (servers before 26.3) the player gets Blindness for the same time instead.
+# The white screen is one glyph of the pack's firearms:flash font (a big white bitmap) shown as a TITLE; the title's
+# own fade-out fades it. No shaders. Without the pack nothing shows.
 flashbang:
-  levels: 10             # how many whiteness steps the pack carries (more = smoother fade, more files)
-  hold-ticks: 12         # full white this long (scaled by how hard the flash hit) before it fades
-  fallback-blindness: true
+  hold-ticks: 12         # solid white this long (scaled by how hard the flash hit) before the fade
 
 # ---- Resource pack generator ----
 pack:
-  # Core shaders and post effects baked into the pack (26.3 clients): assets/minecraft/shaders/core/item.vsh with the
-  # recoil/sway signal decode for `shader: true` guns, and the flashbang post effects. false = a pack without shaders
-  # (no flashbang white, no GPU recoil; everything else works).
-  shaders: true
   include-hidden-cubes: false   # cubes hidden in Blockbench (eye icon) are left out and reported; true keeps them
   # CLIENT MEMORY. The client bakes the geometry of a part again for every pose it appears in, so a pack costs every
   # player roughly cubes x faces x frames x 200 bytes of RAM - three TaCZ guns were 6 million quads, over 1 GB, which

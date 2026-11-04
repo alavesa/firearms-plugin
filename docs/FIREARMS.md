@@ -43,42 +43,28 @@ is the player's own, saved in `viewmodels.yml`, and applied at once with no pack
 computes the placement per player - which is why the rig is the default first person since 0.27. A gun opted out of
 the rig (`anim: { mode: composite }`) cannot follow it.
 
-## Post effects, the rig and core shaders (0.27)
+## Post effects and the rig (0.27)
 
 Since Minecraft 26.3 the item in your hand is drawn into its own "3D HUD" layer *after* the screen post effects
 (`GameRenderer.render3dHud` into `hud3DTarget`, composited after `applyPostEffects`). Whatever a post effect does to
-the view - night-vision goggles through `/posteffect`, the flashbang - the vanilla held item ignores it, which is the
-"rigid gun" in the screenshot. An item_display entity is part of the world and gets every post effect, so the
-display rig (ANIMATIONS.md *Display mode*) is now the default for all guns: `anim.mode: display`, the plugin flips an
-older config once, then `/firearms pack`. Frames mode stays available per gun.
+the view - night-vision goggles through `/posteffect` - the vanilla held item ignores it, which is the "rigid gun"
+in the screenshot. An item_display entity is part of the world and gets every post effect, so the display rig
+(ANIMATIONS.md *Display mode*) is the default for all guns: `anim.mode: display`, the plugin flips an older config
+once, then `/firearms pack`. Frames mode stays available per gun. docs/VIEWMODEL.md has the troubleshooting.
 
-The pack carries core shaders (`pack.shaders: true`, 26.3 clients):
+0.27 also put a core shader into the pack for GPU recoil; 26.3 clients rejected it and with it the whole pack, so
+0.28 carries no shaders at all. Recoil is a smooth camera movement instead (config `recoil:`).
 
-- `assets/minecraft/shaders/core/item.vsh` - vanilla's item vertex shader plus the Firearms signal. A gun with
-  `shader: true` has every non-skin face of its rig parts tinted by a `dyed_color` the plugin writes: `0xA5 GG BB`,
-  GG = the game tick of the last shot (mod 256, latency-compensated), BB = `0xC0 | strength`. With `GameTime` from the
-  Globals block the shader knows each frame how long ago the shot was and computes the kick (up, toward the camera,
-  settling over 7 ticks) and a slow idle sway *per vertex, at the client's frame rate* - dynamic vertex manipulation
-  with one item update per shot. The tint is removed again inside the shader (the part is drawn white = its texture).
-  Hands carry skin tints instead of the signal, so the server applies the same curve to them at tick rate
-  (`DisplayRig.fxMatrix`, mirrored in the shader - keep both the same). Camera shake is `shake:` in guns.yml: a core
-  shader cannot move *your* camera without a per-client signal the world shaders never get, so the camera is still
-  rotation packets.
-- `assets/firearms/post_effect/flash_1..N.json` + `shaders/post/flash.fsh` - the flashbang's whiteness levels.
-
-A client that rejects the shader (26.2 and older do not know `#include`) shows signalled parts tinted; everything
-else is unaffected. `pack.shaders: false` builds a pack without any of it.
-
-## Flashbang (0.27)
+## Flashbang (0.27, no shaders since 0.28)
 
 `grenades.yml kind: flash`: everyone within `radius` with a line of sight gets a white screen, strongest near and
 facing it, fading over `duration` seconds (scaled by how hard it hit; nothing through a wall; a turned back takes a
-third). The white is the post effect from the pack switched through its levels tick by tick (config `flashbang:`),
-on a server without post effects (before 26.3) Blindness for the same time.
+third). The white is one glyph of the pack's `firearms:flash` font - a 1024x512 white bitmap the client draws 4x as
+a title, so it covers any screen - and the title's own fade-out does the fading (config `flashbang.hold-ticks`).
 
 ## The experimental gun (0.27)
 
-`experimental` in guns.yml is where new features are tried first: `fire-detect: rhythm`, `shader: true`, `shake:`.
+`experimental` in guns.yml is where new features are tried first: `fire-detect: rhythm` and `shake:`.
 `/firearms give experimental`; model it as `models/experimental.bbmodel` (a placeholder until then). Nothing on it is
 promised to the other guns before it has been seen working.
 
@@ -116,6 +102,7 @@ Try rhythm on the experimental gun; if it feels right it can be set on any gun w
 | `/firearms clips <model>` | which animation clips the pack baked for a model |
 | `/firearms models` | which model files are expected and found |
 | `/firearms host` | pack delivery status |
+| `/firearms rig` | why `/viewmodel` does or does not move the held gun: six checks, see docs/VIEWMODEL.md |
 | `/firearms reload` | re-read the configs |
 
 Permissions: `firearms.use` (default), `firearms.give` and `firearms.admin` (ops).
@@ -203,7 +190,9 @@ the thing to send along with the model file.
 | --- | --- |
 | why the invisible barrier for holding the trigger | the Minecraft client reports a held left button only while it is mining a block under the crosshair (clicking air or an entity sends one swing per press, holding sends nothing more - checked in the client: attacks happen on key presses, only block mining repeats). A client-side, unbreakable barrier kept ahead on the crosshair ray is therefore the only vanilla way to know the button is still down. Everything about it is tunable under `hold:` in config.yml; set `hold.distance: 0` for tap-fire only |
 | an auto rifle fires one shot per click | guns.yml `fire-mode: "semi,auto"`: since right-click became aiming (0.19) such guns were read as semi; since 0.26 they are AUTO, and `/firearms mode` toggles the held gun between auto and semi |
-| `/viewmodel` changed nothing | before 0.27 it only applied to guns in display mode and the default was frames (and the rig itself failed to start on 26.3: the entity-type lookup, fixed in 0.27). Update, let the config flip to `anim.mode: display`, `/firearms pack` |
+| `/viewmodel` changed nothing | `/firearms rig` with the gun in hand says which link is missing; docs/VIEWMODEL.md explains why it has to be entities, not items. Before 0.27 the default was frames and the rig failed to start on 26.3; in 0.27 the pack's core shader made clients reject the whole pack. 0.28: no shaders, `anim.mode: display`, `/firearms pack` |
+| the pack fails to apply on the client (0.27) | the core shader in the pack; removed in 0.28, rebuild with `/firearms pack` |
+| recoil feels like a jolt | `recoil.kick-ticks` (8 = smooth; 3 = the old kick), `recoil.recovery` and `recovery-ticks` - the kick is an eased camera movement, rotation packets only |
 | the gun is not affected by night vision / a post effect | the vanilla held item is drawn after the post effects since 26.3; a gun on the display rig (default since 0.27) is a world entity and gets them |
 | blood splatters / craters glow in the dark | until 0.27 decals had a fixed brightness; now they take the light of the block they lie on. Not a texture setting: `ambientocclusion` only affects block models |
 | aiming stops while shooting | fixed in 0.27: while the trigger is held the client is mining the hold barrier and sends no right-clicks, so the sight timed out; a live trigger stream now keeps the aim (it is released a few ticks after you stop firing) |

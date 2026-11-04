@@ -64,7 +64,6 @@ public final class PackGenerator {
     /** Display mode: model -> its poses (every tick of every clip) for the client-side item_display rig; written to models/poses.bin. */
     private final Map<String, DisplayPoses> displayPoses = new LinkedHashMap<>();
     private final java.util.Set<String> displayGuns = new java.util.HashSet<>();                          // cmd strings whose first-person model is EMPTY (the rig draws the gun)
-    private final java.util.Set<String> signalCmds = new java.util.HashSet<>();                           // rig part cmds tinted by the core-shader signal (guns.yml shader: true)
     private final Map<String, List<Integer>> cmdTints = new LinkedHashMap<>();                           // part geometry cmd -> tint indices (skin hands)
 
     static final class DisplayPoses {
@@ -205,7 +204,7 @@ public final class PackGenerator {
         p.addProperty("max_format", max);
         pack.add("pack", p);
         put("pack.mcmeta", GSON.toJson(pack));
-        if (plugin.getConfig().getBoolean("pack.shaders", true)) shaderFiles();
+        flashFont();
 
         // anim-index.yml for the plugin
         YamlConfiguration idx = new YamlConfiguration();
@@ -251,46 +250,34 @@ public final class PackGenerator {
         return new Result(models, frames, placeholders, warnings, zip, bytes, biggest, System.currentTimeMillis() - t0, notes);
     }
 
-    /** Core shaders and post effects baked into the pack (pack.shaders): the 26.3 item vertex shader with the recoil/sway
-     *  signal decode (guns.yml shader: true parts), and the flashbang post effects flash_1..flash_N (whiter with N). Shader
-     *  sources ship in the jar under shaders/. These need a 26.3 client: 26.2 and older do not know #include. */
-    private void shaderFiles() {
-        String vsh = resourceText("shaders/item.vsh"), fsh = resourceText("shaders/flash.fsh");
-        if (vsh == null || fsh == null) { warnings.add("shader sources missing from the jar - pack built without core shaders"); return; }
-        put("assets/minecraft/shaders/core/item.vsh", vsh);
-        put("assets/" + NS + "/shaders/post/flash.fsh", fsh);
-        int levels = Math.max(1, Math.min(32, plugin.getConfig().getInt("flashbang.levels", 10)));
-        for (int i = 1; i <= levels; i++) {
-            JsonObject root = new JsonObject();
-            JsonObject targets = new JsonObject(); targets.add("swap", new JsonObject()); root.add("targets", targets);
-            JsonArray passes = new JsonArray();
-            JsonObject p1 = new JsonObject();
-            p1.addProperty("vertex_shader", "minecraft:core/screenquad");
-            p1.addProperty("fragment_shader", NS + ":post/flash");
-            JsonArray in1 = new JsonArray(); JsonObject i1 = new JsonObject(); i1.addProperty("sampler_name", "In"); i1.addProperty("target", "minecraft:main"); in1.add(i1); p1.add("inputs", in1);
-            p1.addProperty("output", "swap");
-            JsonObject u1 = new JsonObject(); JsonArray cfg = new JsonArray(); JsonObject am = new JsonObject();
-            am.addProperty("name", "Amount"); am.addProperty("type", "float"); am.addProperty("value", (double) i / levels); cfg.add(am); u1.add("FlashConfig", cfg); p1.add("uniforms", u1);
-            passes.add(p1);
-            JsonObject p2 = new JsonObject();
-            p2.addProperty("vertex_shader", "minecraft:core/screenquad");
-            p2.addProperty("fragment_shader", "minecraft:post/blit");
-            JsonArray in2 = new JsonArray(); JsonObject i2 = new JsonObject(); i2.addProperty("sampler_name", "In"); i2.addProperty("target", "swap"); in2.add(i2); p2.add("inputs", in2);
-            JsonObject u2 = new JsonObject(); JsonArray bc = new JsonArray(); JsonObject cm = new JsonObject();
-            cm.addProperty("name", "ColorModulate"); cm.addProperty("type", "vec4"); JsonArray one = new JsonArray(); for (int k = 0; k < 4; k++) one.add(1.0); cm.add("value", one); bc.add(cm); u2.add("BlitConfig", bc); p2.add("uniforms", u2);
-            p2.addProperty("output", "minecraft:main");
-            passes.add(p2);
-            root.add("passes", passes);
-            put("assets/" + NS + "/post_effect/flash_" + i + ".json", GSON.toJson(root));
-        }
-        report.add("shaders: core item.vsh (recoil/sway signal) + flashbang post effects flash_1..flash_" + levels + " (26.3 clients)");
+    /** The flashbang's white screen: a font whose one glyph (U+E000) is a 1024x512 white bitmap drawn 4x by a title, so it
+     *  covers any screen; the title's own fade-out does the fading. No shaders involved. */
+    private void flashFont() throws IOException {
+        put("assets/" + NS + "/textures/font/flash.png", whitePng(1024, 512));
+        JsonObject font = new JsonObject();
+        JsonArray providers = new JsonArray();
+        JsonObject bmp = new JsonObject();
+        bmp.addProperty("type", "bitmap");
+        bmp.addProperty("file", NS + ":font/flash.png");
+        bmp.addProperty("ascent", 248);
+        bmp.addProperty("height", 512);
+        JsonArray chars = new JsonArray(); chars.add("\uE000"); bmp.add("chars", chars);
+        providers.add(bmp);
+        font.add("providers", providers);
+        put("assets/" + NS + "/font/flash.json", GSON.toJson(font));
+        report.add("flashbang: font " + NS + ":flash (one white glyph shown as a fading title)");
     }
 
-    private String resourceText(String name) {
-        try (java.io.InputStream in = plugin.getResource(name)) {
-            return in == null ? null : new String(in.readAllBytes(), StandardCharsets.UTF_8);
-        } catch (IOException e) { return null; }
+    private static byte[] whitePng(int w, int h) throws IOException {
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        int[] px = new int[w * h]; java.util.Arrays.fill(px, 0xFFFFFFFF);
+        img.setRGB(0, 0, w, h, px, 0, w);
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(img, "png", out);
+        return out.toByteArray();
     }
+
+    private void put(String path, byte[] data) { putBytes(path, data); }
 
     private void put(String path, String text) {
         // A single NaN / Infinity (a zero-scale bone, a degenerate rotation) is invalid JSON: the client drops that
@@ -387,20 +374,6 @@ public final class PackGenerator {
                 String problem = caseProblem(c);
                 if (problem != null) { written.remove(e.getKey()); warnings.add("case '" + e.getKey() + "' left out of the items file: " + problem); continue; }
                 report.add(base + ": \"" + e.getKey() + "\" -> display rig (empty in first person), rest pose elsewhere");
-                cases.add(c);
-                continue;
-            }
-            if (signalCmds.contains(e.getKey())) {
-                // a shader gun's part: tint 0 = the dye the plugin writes per shot (white = no signal), read by item.vsh
-                JsonObject m0 = new JsonObject();
-                m0.addProperty("type", "minecraft:model");
-                m0.addProperty("model", NS + ":item/" + e.getValue());
-                JsonArray ta = new JsonArray();
-                JsonObject t = new JsonObject(); t.addProperty("type", "minecraft:dye"); t.addProperty("default", 0xFFFFFF); ta.add(t);
-                m0.add("tints", ta);
-                c.add("model", m0);
-                String problem = caseProblem(c);
-                if (problem != null) { written.remove(e.getKey()); warnings.add("case '" + e.getKey() + "' left out of the items file: " + problem); continue; }
                 cases.add(c);
                 continue;
             }
@@ -1321,8 +1294,6 @@ public final class PackGenerator {
         String modeCfg = plugin.getConfig().getString("anim.mode", "display");
         if (currentGun != null && currentGun.animCfg() != null && currentGun.animCfg().contains("mode")) modeCfg = currentGun.animCfg().getString("mode", modeCfg);
         final boolean displayMode = composite && "display".equalsIgnoreCase(modeCfg) && currentGun != null;
-        // shader gun: the geometry (written once, with the rest pose below) carries tintindex 0 on every non-skin face
-        if (comp != null) comp.signalTint = displayMode && currentGun.shader() && plugin.getConfig().getBoolean("pack.shaders", true);
 
         // --- rest model
         if (composite) {
@@ -1430,9 +1401,7 @@ public final class PackGenerator {
             dp.partCmd.add(cmd); dp.partVariant.add(part.variant); dp.partK.add(part.k); dp.partPivot.add(part.pivot.clone());
             cmdToModel.put(cmd, part.geomPath());
             if (!part.tints.isEmpty()) cmdTints.put(cmd, new ArrayList<>(part.tints));
-            else if (comp.signalTint) signalCmds.add(cmd);
         }
-        if (comp.signalTint) report.add(name + ": core-shader signal tint on " + signalCmds.size() + " part(s) - recoil and sway computed by the client's GPU (item.vsh in the pack)");
         if (fpRaw != null) { dp.fpRotation = vec(fpRaw.get("rotation")); dp.fpTranslation = vec(fpRaw.get("translation")); dp.fpScale = fpRaw.has("scale") ? vec(fpRaw.get("scale")) : new double[]{1, 1, 1}; }
         dp.rest = comp.matrices(null, 0, false);
         displayGuns.add(name);
@@ -2068,7 +2037,6 @@ public final class PackGenerator {
         final List<Part> parts = new ArrayList<>();
         final Clip base;                                     // the base pose (static_idle), layered under everything
         int boneParts, displayParts, hiddenByGroup, alwaysHidden, folded;
-        boolean signalTint;                                  // shader gun: every non-skin face gets tintindex 0 = the dye signal the core shader reads
         final List<String> groupNames = new ArrayList<>();
         final java.util.Set<String> animated = new java.util.HashSet<>();   // bones some clip moves: the only ones that need a part of their own
 
@@ -2332,7 +2300,6 @@ public final class PackGenerator {
                         face.addProperty("texture", "#" + idx);
                         if (bf.has("rotation")) face.addProperty("rotation", (int) num(bf.get("rotation"), 0));
                     }
-                    if (signalTint && c.tint < 0) face.addProperty("tintindex", 0);
                     faces.add(f, face);
                     part.faces++;
                 }

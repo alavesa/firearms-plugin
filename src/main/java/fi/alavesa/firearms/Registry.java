@@ -175,7 +175,6 @@ public final class Registry {
                 s.getStringList("skip-animations"),
                 s.getDouble("knockback", plugin.getConfig().getDouble("knockback.default", 0.08)),
                 s.getString("fire-detect", "barrier").trim().toLowerCase(),
-                s.getBoolean("shader", false),
                 Math.max(0, s.getDouble("shake", 0))));
         }
         // Animation frame index written by the pack generator.

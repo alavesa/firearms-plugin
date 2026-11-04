@@ -11,8 +11,8 @@ Ray-based guns plugin for Paper 26.x (compiled against the 1.21.4 API, boot-test
 - Magazines + ammo types: guns share magazine types, right-click a magazine to fill it from loose rounds
 - Craters (bullet holes) as ItemDisplays you texture
 - `.bbmodel` → resource pack: drop Blockbench files in `plugins/Firearms/models/`, run `/firearms pack`; first person is a client-side item_display rig (display mode, default since 0.27), so post effects reach the gun and `/viewmodel` moves it per player
-- Core shaders baked into the pack (26.3): GPU recoil + sway for `shader: true` guns (dynamic vertex manipulation driven by a dye signal), flashbang post effects
-- Grenades: frag, incendiary, smoke, flashbang; an `experimental` gun where new features (rhythm fire detection, shader recoil, camera shake) are tried first
+- Smooth eased camera recoil (rotation packets only), camera shake; flashbang as a fading full-screen font glyph (no shaders anywhere)
+- Grenades: frag, incendiary, smoke, flashbang; an `experimental` gun where new features (rhythm fire detection, camera shake) are tried first; `/firearms rig` + docs/VIEWMODEL.md for viewmodel troubleshooting
 
 Commands: `/firearms list | give <id> [n] [player] | models | pack | mode | reload`, `/viewmodel <right> <up> <forward> | reset`
 

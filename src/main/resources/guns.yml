@@ -55,8 +55,6 @@
 #                 files in plugins/Firearms/models/sounds/<effect name>.ogg - they play in sync with the clip.
 #  fire-detect    barrier (default: the client-side mining barrier reads a held trigger) | rhythm (no barrier; two taps
 #                 within config hold.rhythm-window-ticks = held, keeps firing while taps keep coming) - EXPERIMENTAL
-#  shader         true = this display-mode gun's parts carry the core-shader signal: the recoil kick and the idle sway
-#                 are computed on the client's GPU every frame (pack.shaders, 26.3 clients) - EXPERIMENTAL
 #  shake          camera shake per shot in degrees: random yaw/pitch jitter over the recoil ticks that lands back on centre
 guns:
   pistol:
@@ -164,7 +162,7 @@ guns:
     falloff-min: 0.7
     sound: "minecraft:entity.lightning_bolt.thunder"
     pitch: 1.6
-  # The EXPERIMENTAL gun: where new features are tried first. Give it with /firearms give experimental; model it as
+  # The EXPERIMENTAL gun: where new features are tried first (rhythm fire detection, camera shake). Give it with /firearms give experimental; model it as
   # models/experimental.bbmodel (a placeholder cube until then). Nothing in here is promised to the other guns until
   # it has been seen working on this one.
   experimental:
@@ -173,7 +171,6 @@ guns:
     weight: 3.0
     fire-mode: "semi,auto"
     fire-detect: rhythm    # tap cadence instead of the barrier
-    shader: true           # GPU recoil + sway (core shader in the pack)
     shake: 1.2             # camera shake, degrees
     fire-rate: 9
     damage: 5.0

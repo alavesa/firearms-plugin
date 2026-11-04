@@ -108,6 +108,25 @@ public final class FirearmsCommand implements CommandExecutor, TabCompleter {
                 if (!any) sender.sendMessage(Component.text("  none - run /firearms pack and check its 'clips:' lines; the animation names must match anim.names", NamedTextColor.YELLOW));
                 return true;
             }
+            case "rig", "viewmodel", "diag" -> {
+                if (!(sender instanceof Player pl)) { sender.sendMessage("Players only."); return true; }
+                ItemStack held = pl.getInventory().getItemInMainHand();
+                GunType g = plugin.registry.gunOf(held);
+                sender.sendMessage(Component.text("Display rig diagnostics (why /viewmodel does or does not move the gun):", NamedTextColor.GOLD));
+                sender.sendMessage(Component.text("1. server can build rigs: " + (NmsDisplay.available() ? "YES" : "NO - " + NmsDisplay.problem()), NmsDisplay.available() ? NamedTextColor.GREEN : NamedTextColor.RED));
+                sender.sendMessage(Component.text("2. poses loaded (models/poses.bin from /firearms pack): " + plugin.rig().loadedModels(), plugin.rig().loadedModels().isEmpty() ? NamedTextColor.RED : NamedTextColor.GREEN));
+                if (g == null) sender.sendMessage(Component.text("3. held item is not a gun - hold one and run this again", NamedTextColor.YELLOW));
+                else {
+                    boolean dm = plugin.registry.displayMode(g.model());
+                    sender.sendMessage(Component.text("3. " + g.id() + " (model " + g.model() + "): " + (dm ? "display mode" : "FRAME mode - baked into the pack, /viewmodel cannot move it; anim.mode: display + /firearms pack"), dm ? NamedTextColor.GREEN : NamedTextColor.RED));
+                    sender.sendMessage(Component.text("4. rig showing for you: " + (plugin.rig().showing(pl) ? "YES, " + plugin.rig().partCount(pl) + " part(s) - if you still see no gun, your client has not applied the pack (see 5)" : "NO" + (dm && plugin.rig().has(g.model()) ? " (re-select the hotbar slot)" : "")), plugin.rig().showing(pl) ? NamedTextColor.GREEN : NamedTextColor.RED));
+                }
+                Viewmodels.Setting vm = plugin.viewmodels().of(pl);
+                sender.sendMessage(Component.text("5. pack: " + plugin.packHost.status() + " | your URL " + plugin.packHost.urlFor(pl), NamedTextColor.GRAY));
+                sender.sendMessage(Component.text("6. your /viewmodel offset: " + vm.x + " " + vm.y + " " + vm.z + (vm.isDefault() ? " (stock)" : ""), NamedTextColor.GRAY));
+                sender.sendMessage(Component.text("docs/VIEWMODEL.md explains each line.", NamedTextColor.DARK_GRAY));
+                return true;
+            }
             case "host", "packhost" -> { sender.sendMessage(Component.text(plugin.packHost.status(), NamedTextColor.GOLD)); if (sender instanceof Player pl) { sender.sendMessage(Component.text("URL for you: " + plugin.packHost.urlFor(pl) + "  sha1 " + plugin.packHost.sha1(), NamedTextColor.GRAY)); plugin.packHost.send(pl); sender.sendMessage(Component.text("(pack re-sent to you)", NamedTextColor.GRAY)); } return true; }
             case "version" -> { return usage(sender); }
             case "reload" -> {

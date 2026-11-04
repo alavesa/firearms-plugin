@@ -160,10 +160,6 @@ public final class FireController implements Listener {
         if (registry.casingModel(gun) != null) casings.eject(p, gun, aim);
         recoil(p, gun);
         knockback(p, gun, aim);
-        if (gun.shader() && registry.displayMode(gun.model())) {
-            double maxRecoil = plugin.getConfig().getDouble("stats.max.recoil", 8);
-            plugin.rig().signal(p, Math.max(0.15, Math.min(1, gun.recoil() / Math.max(0.1, maxRecoil))));
-        }
         playClip(p, gun, item, "fire");
     }
 
@@ -228,28 +224,56 @@ public final class FireController implements Listener {
         return dir.clone().add(right.multiply(Math.tan(yaw))).add(trueUp.multiply(Math.tan(pitch))).normalize();
     }
 
-    /** Camera kick via rotation-only position packets, spread over a few ticks (no teleports). */
+    /** Camera recoil: the kick is not a jolt but a SMOOTH camera movement - the shot's yaw/pitch is spread over
+     *  recoil.kick-ticks with an ease-in-out profile (small first step, biggest in the middle, small last), then
+     *  recoil.recovery of it drifts back over recoil.recovery-ticks the same way; shake (guns.yml) adds jitter that
+     *  sums to zero. Every tick's increment of every running shot is added up and sent as ONE relative rotation
+     *  packet by tick(): rotation only, no teleport, no movement-speed change. */
+    private final Map<UUID, double[][]> recoilQueue = new ConcurrentHashMap<>();   // per player: [tick ahead][yaw, pitch]
+
     private void recoil(Player p, GunType gun) {
         double mult = isAiming(p) ? plugin.getConfig().getDouble("recoil.aim-multiplier", 0.5) : 1.0;
         double up = gun.recoil() * mult;
         double side = (ThreadLocalRandom.current().nextDouble() * 2 - 1) * gun.hRecoil() * mult;
-        if (up == 0 && side == 0) return;
-        int ticks = Math.max(1, plugin.getConfig().getInt("recoil.ticks", 3));
-        double[] weights = ticks == 1 ? new double[]{1} : ticks == 2 ? new double[]{0.65, 0.35} : new double[]{0.5, 0.3, 0.2};
-        // camera shake (guns.yml shake): random jitter over the same ticks that adds up to zero - the view wobbles and lands back
         double sh = gun.shake() * mult;
+        if (up == 0 && side == 0 && sh == 0) return;
+        int kickTicks = Math.max(1, plugin.getConfig().getInt("recoil.kick-ticks", 8));
+        int recTicks = Math.max(1, plugin.getConfig().getInt("recoil.recovery-ticks", 12));
+        double recovery = Math.max(0, Math.min(1, plugin.getConfig().getDouble("recoil.recovery", 0.5)));
+        int total = kickTicks + recTicks;
+        double[][] q = recoilQueue.computeIfAbsent(p.getUniqueId(), x -> new double[64][2]);
         var r = ThreadLocalRandom.current();
-        double[] jy = new double[weights.length + 1], jp = new double[weights.length + 1];
-        if (sh > 0) for (int i = 0; i < weights.length; i++) { jy[i] = (r.nextDouble() * 2 - 1) * sh * (1 - (double) i / weights.length); jp[i] = (r.nextDouble() * 2 - 1) * sh * (1 - (double) i / weights.length); }
-        for (int i = 0; i <= Math.min(ticks, weights.length); i++) {
-            final double w = i < weights.length ? weights[i] : 0;
-            final double sy = (i < weights.length ? jy[i] : 0) - (i > 0 ? jy[i - 1] : 0), sp = (i < weights.length ? jp[i] : 0) - (i > 0 ? jp[i - 1] : 0);
-            if (w == 0 && sy == 0 && sp == 0) continue;
-            plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
-                if (!p.isOnline()) return;
-                float yaw = (float) (side * w + sy), pitch = (float) (-up * w + sp);
-                if (!NmsRecoil.sendRotation(p, yaw, pitch)) p.setRotation(p.getLocation().getYaw() + yaw, p.getLocation().getPitch() + pitch);
-            }, i);
+        double prevJy = 0, prevJp = 0;
+        for (int i = 0; i < Math.min(total, q.length); i++) {
+            double w = i < kickTicks ? ease(i + 1, kickTicks) - ease(i, kickTicks) : -recovery * (ease(i - kickTicks + 1, recTicks) - ease(i - kickTicks, recTicks));
+            double jy = 0, jp = 0;
+            if (sh > 0 && i < kickTicks - 1) { double f = 1 - (double) i / kickTicks; jy = (r.nextDouble() * 2 - 1) * sh * f; jp = (r.nextDouble() * 2 - 1) * sh * f; }
+            q[i][0] += side * w + (jy - prevJy);
+            q[i][1] += -up * w + (jp - prevJp);
+            prevJy = jy; prevJp = jp;
+        }
+    }
+
+    /** Cosine ease-in-out, 0..1 over n steps. */
+    private static double ease(int i, int n) { double u = Math.max(0, Math.min(1, (double) i / n)); return (1 - Math.cos(u * Math.PI)) / 2; }
+
+    /** Send this tick's summed recoil increment to every player with one queued. */
+    private void tickRecoil() {
+        for (var it = recoilQueue.entrySet().iterator(); it.hasNext(); ) {
+            var e = it.next();
+            double[][] q = e.getValue();
+            double yaw = q[0][0], pitch = q[0][1];
+            System.arraycopy(q, 1, q, 0, q.length - 1);
+            q[q.length - 1] = new double[2];
+            Player p = plugin.getServer().getPlayer(e.getKey());
+            if (p == null || !p.isOnline()) { it.remove(); continue; }
+            if (Math.abs(yaw) > 1e-4 || Math.abs(pitch) > 1e-4) {
+                if (!NmsRecoil.sendRotation(p, (float) yaw, (float) pitch)) p.setRotation(p.getLocation().getYaw() + (float) yaw, p.getLocation().getPitch() + (float) pitch);
+            } else {
+                boolean empty = true;
+                for (double[] d : q) if (d[0] != 0 || d[1] != 0) { empty = false; break; }
+                if (empty) it.remove();
+            }
         }
     }
 
@@ -509,7 +533,7 @@ public final class FireController implements Listener {
         cancelClip(event.getPlayer());
         UUID id = event.getPlayer().getUniqueId();
         nextShotAt.remove(id); lastSwing.remove(id); lastShotTick.remove(id); drawUntil.remove(id); aimSeen.remove(id);
-        lastSwingTick.remove(id); rhythmPrevTap.remove(id); rhythmActive.remove(id);
+        lastSwingTick.remove(id); rhythmPrevTap.remove(id); rhythmActive.remove(id); recoilQueue.remove(id);
     }
 
     // ------------------------------------------------------------------ aiming down the sight
@@ -526,6 +550,7 @@ public final class FireController implements Listener {
     /** Every tick: release the sight when the right-click stream stopped; keep the client-side aim pose fresh. */
     public void tick() {
         int now = plugin.getServer().getCurrentTick();
+        tickRecoil();
         for (Player pl : plugin.getServer().getOnlinePlayers()) {
             GunType held = registry.gunOf(pl.getInventory().getItemInMainHand());
             if (held != null) lastPos.put(pl.getUniqueId(), pl.getLocation().toVector()); else lastPos.remove(pl.getUniqueId());

@@ -36,37 +36,9 @@ final class DisplayRig {
         List<NmsDisplay.Part> parts = new ArrayList<>();   // index = part index, null = not shown for this player (other hand variant)
         float[][] current;                                 // the pose being shown
         double[][][] lastSent;                             // per part: last transform sent (null = hidden)
-        List<ItemStack> stacks = new ArrayList<>();        // per part: the item it shows (null = not shown)
         String clip; int frame = -1; double stretch = 1; int startTick; Runnable then;
         boolean aiming, spawned;
         double lastPitch = 1e9; boolean lastSneak;
-        boolean fx;                                        // shader gun: parts carry the signal tint, hands mirror the curve from here
-        long shotAt = Long.MIN_VALUE; double strength;     // last shot (server game tick) and its strength 0..1, for the mirror
-        int signalStamp;                                   // newest signal; an older clear-task must not undo a newer shot
-    }
-
-    /** The recoil/sway curve shared with the core shader (shaders/item.vsh - keep both the same). */
-    static final int FX_RECOIL_TICKS = 7;
-    static final double FX_KICK_PITCH = 0.07, FX_KICK_BACK = 0.06;
-    /** Kick 0..1 at `t` ticks after the shot of `strength` 0..1: fast up, slower back, zero again at FX_RECOIL_TICKS. */
-    static double kick(double t, double strength) {
-        if (strength <= 0 || t < 0 || t >= FX_RECOIL_TICKS) return 0;
-        double u = t / FX_RECOIL_TICKS;
-        return strength * Math.sin(u * Math.PI) * (1 - u * 0.6);
-    }
-    /** The view-space transform of the curve at world game tick `now` (sway always, kick after a shot). */
-    static double[][] fxMatrix(long now, long shotAt, double strength) {
-        double n = now % 24000;
-        double t = shotAt == Long.MIN_VALUE ? 1e9 : (((now - shotAt) % 256) + 256) % 256;
-        double k = kick(t, strength);
-        double pitch = k * FX_KICK_PITCH + Math.sin(n * 0.11) * 0.004 + Math.sin(n * 0.037) * 0.003;
-        double yaw = Math.sin(n * 0.073) * 0.003;
-        return mul(translate(0, 0, k * FX_KICK_BACK), mul(rotXYZ(new double[]{0, Math.toDegrees(yaw), 0}), rotXYZ(new double[]{Math.toDegrees(pitch), 0, 0})));
-    }
-    /** The dye the shader decodes: 0xA5, the shot tick mod 256, 0xC0 | strength (0..63). */
-    static int signalRgb(long shotTick, double strength) {
-        int st = (int) Math.round(Math.max(0, Math.min(1, strength)) * 63);
-        return (0xA5 << 16) | ((int) (((shotTick % 256) + 256) % 256) << 8) | (0xC0 | st);
     }
 
     private final FirearmsPlugin plugin;
@@ -108,6 +80,9 @@ final class DisplayRig {
 
     boolean has(String model) { return models.containsKey(model); }
     boolean showing(Player p) { return active.containsKey(p.getUniqueId()); }
+    /** Parts spawned for this player's rig (0 = no rig). */
+    int partCount(Player p) { Active a = active.get(p.getUniqueId()); if (a == null) return 0; int n = 0; for (NmsDisplay.Part pt : a.parts) if (pt != null) n++; return n; }
+    java.util.Set<String> loadedModels() { return models.keySet(); }
 
     /** Build the rig for this player's gun (called when the gun is selected). */
     void show(Player p, GunType gun, ItemStack held) {
@@ -123,12 +98,10 @@ final class DisplayRig {
             for (int i = 0; i < mp.partCmd.length; i++) {
                 int v = mp.partVariant[i];
                 boolean show = v == 0 || v == 3 || v == 4 || (v == 1 && !(slim && hasSlim)) || (v == 2 && slim && hasSlim);
-                if (!show) { a.parts.add(null); a.stacks.add(null); continue; }
+                if (!show) { a.parts.add(null); continue; }
                 ItemStack stack = held.clone();
                 stack.setAmount(1);
                 registry.setModel(stack, mp.partCmd[i]);
-                if (gun.shader() && v != 1 && v != 2) { a.fx = true; stack = Registry.withComponent(stack, "minecraft:dyed_color=" + signalRgb(0, 0)); }   // idle signal: sway only
-                a.stacks.add(stack);
                 a.parts.add(NmsDisplay.create(p, stack, range));
             }
             a.current = mp.rest;
@@ -169,35 +142,6 @@ final class DisplayRig {
 
     void stopClip(Player p) { Active a = active.get(p.getUniqueId()); if (a != null) { a.clip = null; a.then = null; } }
 
-    /** A shot on a shader gun: dye the signalled parts with the shot tick (latency-compensated, so the client's GPU starts
-     *  the kick as the packet lands) and its strength; the hands follow the same curve from tick() for FX_RECOIL_TICKS. */
-    void signal(Player p, double strength) {
-        Active a = active.get(p.getUniqueId());
-        if (a == null || !a.fx) return;
-        long now = p.getWorld().getGameTime();
-        a.shotAt = now; a.strength = strength;
-        int stamp = ++a.signalStamp;
-        long pingTicks = Math.max(0, Math.min(40, Math.round(p.getPing() / 50.0)));
-        dye(p, a, signalRgb((now % 24000) + pingTicks, strength));
-        plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
-            Active b = active.get(p.getUniqueId());
-            if (b != a || b.signalStamp != stamp) return;
-            dye(p, b, signalRgb(0, 0));
-        }, FX_RECOIL_TICKS + pingTicks + 2);
-    }
-    private void dye(Player p, Active a, int rgb) {
-        for (int i = 0; i < a.parts.size(); i++) {
-            NmsDisplay.Part part = a.parts.get(i);
-            int v = a.poses.partVariant[i];
-            if (part == null || v == 1 || v == 2) continue;
-            try {
-                ItemStack s = Registry.withComponent(a.stacks.get(i), "minecraft:dyed_color=" + rgb);
-                if (s == null) return;
-                NmsDisplay.item(part, s);
-                NmsDisplay.update(p, part);
-            } catch (Exception e) { plugin.getLogger().warning("Display rig signal failed: " + e); return; }
-        }
-    }
     void aim(Player p, boolean on) { Active a = active.get(p.getUniqueId()); if (a != null) a.aiming = on; }
     boolean playing(Player p) { Active a = active.get(p.getUniqueId()); return a != null && a.clip != null; }
 
@@ -225,7 +169,6 @@ final class DisplayRig {
                 if (want != a.current) { a.current = want; duration = plugin.getConfig().getInt("display.rig.aim-ticks", 3); }
                 else duration = 0;
             }
-            if (a.fx && duration == 0) duration = 1;   // the hands follow the shader curve: whatever moved is re-sent, blended over the tick
             send(p, a, duration, false);
         }
     }
@@ -240,15 +183,13 @@ final class DisplayRig {
         a.lastPitch = pitch; a.lastSneak = sneak;
         double[][] offC = eyeOffsetInCamera(pitch, sneak);
         double[][] hand = handChain(a.poses, plugin.viewmodels() != null ? plugin.viewmodels().of(p) : new Viewmodels.Setting());
-        double[][] fx = a.fx ? fxMatrix(p.getWorld().getGameTime(), a.shotAt, a.strength) : null;
         for (int i = 0; i < a.parts.size(); i++) {
             NmsDisplay.Part part = a.parts.get(i);
             if (part == null) continue;
             float[] m = a.current[i];
             double[][] tf;
-            int v = a.poses.partVariant[i];
             if (m == null) tf = hiddenTransform();
-            else tf = transformFor(a.poses, i, m, hand, offC, fx != null && (v == 1 || v == 2) ? fx : null);
+            else tf = transformFor(a.poses, i, m, hand, offC);
             if (!all && same(tf, a.lastSent[i])) continue;
             a.lastSent[i] = tf;
             try { NmsDisplay.transform(part, tf, cameraMoved && duration == 0 ? 1 : duration); if (!all || a.spawned) NmsDisplay.update(p, part); }
@@ -271,7 +212,7 @@ final class DisplayRig {
     }
 
     /** The entity transformation that puts part i where the item renderer would draw it, in the display's own frame. */
-    private double[][] transformFor(ModelPoses mp, int i, float[] m, double[][] hand, double[][] offC, double[][] fx) {
+    private double[][] transformFor(ModelPoses mp, int i, float[] m, double[][] hand, double[][] offC) {
         double[][] M = {{m[0], m[1], m[2], m[3]}, {m[4], m[5], m[6], m[7]}, {m[8], m[9], m[10], m[11]}, {0, 0, 0, 1}};
         double[] pv = mp.partPivot[i];
         double[] Pw = { M[0][0]*pv[0]+M[0][1]*pv[1]+M[0][2]*pv[2]+M[0][3], M[1][0]*pv[0]+M[1][1]*pv[1]+M[1][2]*pv[2]+M[1][3], M[2][0]*pv[0]+M[2][1]*pv[1]+M[2][2]*pv[2]+M[2][3] };
@@ -279,7 +220,6 @@ final class DisplayRig {
         // gun(blocks) = Pw/16 + (M3/k) r, r = the item model centred at the entity origin
         double[][] g = {{M[0][0]/k, M[0][1]/k, M[0][2]/k, Pw[0]/16}, {M[1][0]/k, M[1][1]/k, M[1][2]/k, Pw[1]/16}, {M[2][0]/k, M[2][1]/k, M[2][2]/k, Pw[2]/16}, {0, 0, 0, 1}};
         double[][] view = mul(hand, g);                     // view space: +X right, +Y up, -Z forward
-        if (fx != null) view = mul(fx, view);               // hands of a shader gun: the recoil/sway curve the GPU applies to the other parts
         double[][] flip = rotY180();                        // camera/display frame: +X left, +Z forward; the item renderer flips once more
         double[][] tf = mul(mul(flip, view), flip);
         for (int a = 0; a < 3; a++) tf[a][3] -= offC[a][0];
