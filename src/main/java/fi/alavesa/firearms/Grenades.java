@@ -41,7 +41,8 @@ import java.util.concurrent.ThreadLocalRandom;
 /**
  * Grenades: RIGHT-click unpins (the "unpin" clip; with cook: true the fuse starts now), LEFT-click throws (the
  * "throw" clip, then the grenade leaves the hand). The thrown grenade is an ItemDisplay with its own physics
- * (gravity, bounces, rolling to a stop), then: frag = blast damage, incendiary = fire, smoke = a smoke cloud.
+ * (gravity, bounces, rolling to a stop), then: frag = blast damage, incendiary = fire, smoke = a smoke cloud,
+ * flash = a white screen for everyone in sight (Flash).
  */
 public final class Grenades implements Listener {
 
@@ -203,6 +204,7 @@ public final class Grenades implements Listener {
                     }, when);
                 }
             }
+            case "flash", "flashbang", "stun" -> plugin.flash().burst(at, t.type, t.thrower);
             case "smoke" -> {
                 w.playSound(at, "minecraft:block.fire.extinguish", 1.2f, 0.6f);
                 t.smokeLeft = (int) Math.round(t.type.duration() * 20);

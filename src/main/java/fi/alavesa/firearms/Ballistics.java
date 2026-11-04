@@ -441,7 +441,8 @@ public final class Ballistics {
             disp.setItemStack(registry.buildDecal(model));
             disp.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.FIXED);
             disp.setPersistent(false);
-            disp.setBrightness(new org.bukkit.entity.Display.Brightness(8, 15));
+            // no brightness override: a decal takes the light of the block it lies on, so blood is dark in the dark
+            // (a fixed brightness made every splatter and crater glow at night)
             // FIXED shows the item flat with its face toward +Z; turn +Z onto the struck face's normal,
             // with a random spin around it so holes don't all look identical.
             Quaternionf q = new Quaternionf().rotationTo(new Vector3f(0, 0, 1), new Vector3f((float) n.getX(), (float) n.getY(), (float) n.getZ()));

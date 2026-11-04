@@ -54,6 +54,9 @@ public final class FireController implements Listener {
     private final Map<UUID, Long> lastShotTick = new ConcurrentHashMap<>();
     private final Map<UUID, Integer> drawUntil = new ConcurrentHashMap<>();
     private final Map<UUID, Integer> aimSeen = new ConcurrentHashMap<>();     // last server tick a right-click arrived (the client repeats it every ~4 ticks while held)
+    private final Map<UUID, Integer> lastSwingTick = new ConcurrentHashMap<>(); // last server tick a trigger pull (arm swing) arrived
+    private final Map<UUID, Integer> rhythmPrevTap = new ConcurrentHashMap<>(); // rhythm guns: the tap before the last one
+    private final Set<UUID> rhythmActive = ConcurrentHashMap.newKeySet();      // rhythm guns: taps came fast enough = treated as a held trigger
     private final Set<UUID> aiming = ConcurrentHashMap.newKeySet();          // players holding the sight
     private final Map<UUID, Vector> lastPos = new ConcurrentHashMap<>();      // position a tick ago: is the shooter standing still?
     private final Map<UUID, Integer> slowStamp = new ConcurrentHashMap<>();   // the latest knockback slow-down per player (older removals skip)
@@ -113,14 +116,31 @@ public final class FireController implements Listener {
         }
     }
 
+    /** A trigger pull arrived (an arm swing / left click): the input side. Rhythm guns read the tap cadence here -
+     *  two taps within hold.rhythm-window-ticks = "held", and tick() keeps firing while taps keep coming. */
     private void trigger(Player p, GunType gun, ItemStack item) {
         UUID id = p.getUniqueId();
         long now = System.currentTimeMillis();
+        int tick = plugin.getServer().getCurrentTick();
         Long last = lastSwing.put(id, now);
+        lastSwingTick.put(id, tick);
+        boolean auto = registry.isAuto(item, gun);
+        if (gun.rhythm() && auto) {
+            Integer prev = rhythmPrevTap.put(id, tick);
+            int window = Math.max(1, plugin.getConfig().getInt("hold.rhythm-window-ticks", 6));
+            if (prev != null && tick - prev > 0 && tick - prev <= window) rhythmActive.add(id);
+        }
+        if (!auto && last != null && now - last < 150) return;      // semi: ignore the per-tick hold stream
+        fire(p, gun, item);
+    }
+
+    /** One shot if the gun can fire now (fire rate, draw, reload, rounds). */
+    private void fire(Player p, GunType gun, ItemStack item) {
+        UUID id = p.getUniqueId();
+        long now = System.currentTimeMillis();
         if (reloadingMag.contains(id)) return;                       // a magazine swap cannot be interrupted
         Integer du = drawUntil.get(id);
         if (du != null && plugin.getServer().getCurrentTick() < du) return;   // still drawing the gun: no shooting
-        if (!registry.isAuto(item, gun) && last != null && now - last < 150) return; // semi: ignore the per-tick hold stream
         Long next = nextShotAt.get(id);
         if (next != null && now < next) return;                      // fire-rate
         if (reloadingPump.contains(id)) cancelReload(p);             // pump reload: shooting interrupts it
@@ -140,6 +160,10 @@ public final class FireController implements Listener {
         if (registry.casingModel(gun) != null) casings.eject(p, gun, aim);
         recoil(p, gun);
         knockback(p, gun, aim);
+        if (gun.shader() && registry.displayMode(gun.model())) {
+            double maxRecoil = plugin.getConfig().getDouble("stats.max.recoil", 8);
+            plugin.rig().signal(p, Math.max(0.15, Math.min(1, gun.recoil() / Math.max(0.1, maxRecoil))));
+        }
         playClip(p, gun, item, "fire");
     }
 
@@ -212,11 +236,18 @@ public final class FireController implements Listener {
         if (up == 0 && side == 0) return;
         int ticks = Math.max(1, plugin.getConfig().getInt("recoil.ticks", 3));
         double[] weights = ticks == 1 ? new double[]{1} : ticks == 2 ? new double[]{0.65, 0.35} : new double[]{0.5, 0.3, 0.2};
-        for (int i = 0; i < Math.min(ticks, weights.length); i++) {
-            final double w = weights[i];
+        // camera shake (guns.yml shake): random jitter over the same ticks that adds up to zero - the view wobbles and lands back
+        double sh = gun.shake() * mult;
+        var r = ThreadLocalRandom.current();
+        double[] jy = new double[weights.length + 1], jp = new double[weights.length + 1];
+        if (sh > 0) for (int i = 0; i < weights.length; i++) { jy[i] = (r.nextDouble() * 2 - 1) * sh * (1 - (double) i / weights.length); jp[i] = (r.nextDouble() * 2 - 1) * sh * (1 - (double) i / weights.length); }
+        for (int i = 0; i <= Math.min(ticks, weights.length); i++) {
+            final double w = i < weights.length ? weights[i] : 0;
+            final double sy = (i < weights.length ? jy[i] : 0) - (i > 0 ? jy[i - 1] : 0), sp = (i < weights.length ? jp[i] : 0) - (i > 0 ? jp[i - 1] : 0);
+            if (w == 0 && sy == 0 && sp == 0) continue;
             plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
                 if (!p.isOnline()) return;
-                float yaw = (float) (side * w), pitch = (float) (-up * w);
+                float yaw = (float) (side * w + sy), pitch = (float) (-up * w + sp);
                 if (!NmsRecoil.sendRotation(p, yaw, pitch)) p.setRotation(p.getLocation().getYaw() + yaw, p.getLocation().getPitch() + pitch);
             }, i);
         }
@@ -478,6 +509,7 @@ public final class FireController implements Listener {
         cancelClip(event.getPlayer());
         UUID id = event.getPlayer().getUniqueId();
         nextShotAt.remove(id); lastSwing.remove(id); lastShotTick.remove(id); drawUntil.remove(id); aimSeen.remove(id);
+        lastSwingTick.remove(id); rhythmPrevTap.remove(id); rhythmActive.remove(id);
     }
 
     // ------------------------------------------------------------------ aiming down the sight
@@ -499,6 +531,16 @@ public final class FireController implements Listener {
             if (held != null) lastPos.put(pl.getUniqueId(), pl.getLocation().toVector()); else lastPos.remove(pl.getUniqueId());
             if (held != null && registry.displayMode(held.model()) && !plugin.rig().showing(pl)) plugin.rig().show(pl, held, pl.getInventory().getItemInMainHand());   // given / joined holding it
         }
+        // Rhythm guns: keep firing while taps keep arriving inside the window (the cadence stands in for a held button).
+        int window = Math.max(1, plugin.getConfig().getInt("hold.rhythm-window-ticks", 6));
+        for (UUID id : new ArrayList<>(rhythmActive)) {
+            Player p = plugin.getServer().getPlayer(id);
+            Integer ls = lastSwingTick.get(id);
+            ItemStack item = p == null ? null : p.getInventory().getItemInMainHand();
+            GunType gun = registry.gunOf(item);
+            if (p == null || gun == null || !gun.rhythm() || !registry.isAuto(item, gun) || ls == null || now - ls > window) { rhythmActive.remove(id); rhythmPrevTap.remove(id); continue; }
+            fire(p, gun, item);
+        }
         int timeout = plugin.getConfig().getInt("aim.hold-timeout-ticks", 7);
         for (UUID id : new ArrayList<>(aiming)) {
             Player p = plugin.getServer().getPlayer(id);
@@ -506,7 +548,11 @@ public final class FireController implements Listener {
             Integer seen = aimSeen.get(id);
             ItemStack item = p.getInventory().getItemInMainHand();
             GunType gun = registry.gunOf(item);
-            if (gun == null || seen == null || now - seen > timeout) { exitAim(p, gun, item, true); continue; }
+            // While the trigger is held the client is "mining" the hold barrier and sends NO right-clicks (it does not use
+            // items while destroying a block), so the sight used to drop mid-spray: a live trigger stream keeps the aim.
+            Integer ls = lastSwingTick.get(id);
+            boolean firing = ls != null && now - ls <= timeout;
+            if (gun == null || seen == null || (now - seen > timeout && !firing)) { exitAim(p, gun, item, true); continue; }
             if (now % 5 == 0 && !animTasks.containsKey(id)) sendAimView(p, gun, item);   // a server inventory update may have overwritten it
         }
     }

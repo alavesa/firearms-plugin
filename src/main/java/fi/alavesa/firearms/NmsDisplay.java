@@ -37,10 +37,24 @@ final class NmsDisplay {
             Class<?> context = Class.forName("net.minecraft.world.item.ItemDisplayContext");
             Class<?> synched = Class.forName("net.minecraft.network.syncher.SynchedEntityData");
             itemDisplayType = null;
-            for (Field f : entityType.getFields()) if (f.getName().equals("ITEM_DISPLAY")) itemDisplayType = f.get(null);
-            if (itemDisplayType == null) for (Field f : entityType.getFields()) if (f.getGenericType().getTypeName().contains("Display$ItemDisplay")) itemDisplayType = f.get(null);
-            if (itemDisplayType == null) { Object opt = entityType.getMethod("byString", String.class).invoke(null, "item_display"); if (opt instanceof java.util.Optional<?> o && o.isPresent()) itemDisplayType = o.get(); }
-            if (itemDisplayType == null) throw new IllegalStateException("EntityType.ITEM_DISPLAY not found");
+            // 26.3 moved the vanilla constants to EntityTypes; older servers keep them on EntityType; the registry is the fallback
+            for (String holder : new String[]{"net.minecraft.world.entity.EntityTypes", "net.minecraft.world.entity.EntityType"}) {
+                if (itemDisplayType != null) break;
+                try { for (Field f : Class.forName(holder).getFields()) if (f.getName().equals("ITEM_DISPLAY")) { itemDisplayType = f.get(null); break; } } catch (ClassNotFoundException ignored) { }
+            }
+            if (itemDisplayType == null) {
+                Object reg = Class.forName("net.minecraft.core.registries.BuiltInRegistries").getField("ENTITY_TYPE").get(null);
+                Class<?> ident = Class.forName("net.minecraft.resources.Identifier");
+                Object key = ident.getMethod("parse", String.class).invoke(null, "minecraft:item_display");
+                for (Method m : reg.getClass().getMethods()) {
+                    if (m.getParameterCount() == 1 && m.getParameterTypes()[0] == ident && (m.getName().equals("getValue") || m.getName().equals("get"))) {
+                        Object v = m.invoke(reg, key);
+                        if (v instanceof java.util.Optional<?> o) v = o.orElse(null);
+                        if (v != null && entityType.isInstance(v)) { itemDisplayType = v; break; }
+                    }
+                }
+            }
+            if (itemDisplayType == null) throw new IllegalStateException("EntityType ITEM_DISPLAY not found (EntityTypes / EntityType / registry)");
             itemDisplayCtor = itemDisplay.getConstructor(entityType, level);
             billboardCenter = billboard.getField("CENTER").get(null);
             contextFixed = context.getField("FIXED").get(null);

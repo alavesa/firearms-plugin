@@ -76,7 +76,7 @@ public final class HoldDetector {
             UUID id = p.getUniqueId();
             ItemStack held = p.getInventory().getItemInMainHand();
             GunType gun = registry.gunOf(held);
-            boolean auto = gun != null && registry.isAuto(held, gun);
+            boolean auto = gun != null && registry.isAuto(held, gun) && !gun.rhythm();   // rhythm guns: no barrier, the tap cadence decides
             Map<Location, Integer> mine = cells.get(id);
             Set<Location> want = new HashSet<>();
             if (auto && maxDist > 0 && !p.isDead() && p.isValid()) {
@@ -175,7 +175,7 @@ public final class HoldDetector {
             ItemStack held = p.getInventory().getItemInMainHand();
             GunType gun = registry.gunOf(held);
             boolean holding = gun != null;
-            boolean auto = holding && registry.isAuto(held, gun);
+            boolean auto = holding && registry.isAuto(held, gun) && !gun.rhythm();
             modifier(p.getAttribute(Attribute.BLOCK_INTERACTION_RANGE), reachKey, auto && reachBonus != 0 ? reachBonus : 0,
                 AttributeModifier.Operation.ADD_NUMBER);
             double weight = holding ? -Math.min(0.9, gun.weight() * perKg) : 0;

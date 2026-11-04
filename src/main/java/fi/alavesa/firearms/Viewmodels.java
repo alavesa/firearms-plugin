@@ -17,20 +17,23 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * /viewmodel: each player's own placement of the first-person gun, like Counter-Strike's viewmodel settings -
- * offset (right, up, forward), fov and scale - applied by the display rig for that player only, at once, without
- * touching the pack. Stored in plugins/Firearms/viewmodels.yml. A setting can be for every gun ("*") or one gun.
- * Only guns in display mode can follow it: a frame-mode gun's placement is baked into the pack for everybody.
+ * /viewmodel: each player's own placement of the first-person gun - one offset (right, up, forward) for EVERY gun,
+ * applied by the display rig for that player only, at once, without touching the pack. Each value is -5..5 in
+ * sixteenths of a block (the unit of a model pixel). Where a gun sits relative to the other guns is the model's
+ * own business (/firearms pose, baked into the pack for everybody); this only shifts the whole view for one player.
+ * Stored in plugins/Firearms/viewmodels.yml.
  */
 public final class Viewmodels implements org.bukkit.command.CommandExecutor, TabCompleter {
-    /** One player's settings for one gun id (or "*"). Offsets in blocks of view space; fov like CS (60 = stock). */
+    /** One player's offset in sixteenths of a block: right, up, forward. */
     public static final class Setting {
-        public double x, y, z, scale = 1, fov = 60;
-        boolean isDefault() { return x == 0 && y == 0 && z == 0 && scale == 1 && fov == 60; }
+        public double x, y, z;
+        boolean isDefault() { return x == 0 && y == 0 && z == 0; }
     }
 
+    static final double MAX = 5.0;
+
     private final FirearmsPlugin plugin;
-    private final Map<UUID, Map<String, Setting>> settings = new ConcurrentHashMap<>();
+    private final Map<UUID, Setting> settings = new ConcurrentHashMap<>();
     private final File file;
 
     public Viewmodels(FirearmsPlugin plugin) {
@@ -39,14 +42,13 @@ public final class Viewmodels implements org.bukkit.command.CommandExecutor, Tab
         load();
     }
 
-    /** The setting in force for this player and gun (the gun's own, else "*", else stock). */
-    public Setting of(Player p, String gunId) {
-        Map<String, Setting> m = settings.get(p.getUniqueId());
-        if (m == null) return new Setting();
-        Setting s = m.get(gunId);
-        if (s == null) s = m.get("*");
+    /** The offset in force for this player (stock when none). */
+    public Setting of(Player p) {
+        Setting s = settings.get(p.getUniqueId());
         return s == null ? new Setting() : s;
     }
+
+    static double clamp(double v) { return Math.max(-MAX, Math.min(MAX, v)); }
 
     private void load() {
         settings.clear();
@@ -56,87 +58,63 @@ public final class Viewmodels implements org.bukkit.command.CommandExecutor, Tab
             UUID u; try { u = UUID.fromString(id); } catch (IllegalArgumentException e) { continue; }
             var sec = y.getConfigurationSection(id);
             if (sec == null) continue;
-            Map<String, Setting> m = new ConcurrentHashMap<>();
-            for (String gun : sec.getKeys(false)) {
-                var g = sec.getConfigurationSection(gun);
-                if (g == null) continue;
-                Setting s = new Setting();
-                s.x = g.getDouble("x", 0); s.y = g.getDouble("y", 0); s.z = g.getDouble("z", 0); s.scale = g.getDouble("scale", 1); s.fov = g.getDouble("fov", 60);
-                m.put(gun, s);
-            }
-            settings.put(u, m);
+            // 0.26 wrote per-gun sections ("*" / gun id, in blocks); only the "*" one is carried over, in pixels
+            if (sec.contains("x")) read(u, sec.getDouble("x"), sec.getDouble("y"), sec.getDouble("z"));
+            else if (sec.getConfigurationSection("*") != null) { var g = sec.getConfigurationSection("*"); read(u, g.getDouble("x") * 16, g.getDouble("y") * 16, g.getDouble("z") * 16); }
         }
+    }
+    private void read(UUID u, double x, double y, double z) {
+        Setting s = new Setting(); s.x = clamp(x); s.y = clamp(y); s.z = clamp(z);
+        if (!s.isDefault()) settings.put(u, s);
     }
 
     private void save() {
         YamlConfiguration y = new YamlConfiguration();
-        for (var e : settings.entrySet()) for (var g : e.getValue().entrySet()) {
-            String k = e.getKey() + "." + g.getKey();
-            Setting s = g.getValue();
-            y.set(k + ".x", s.x); y.set(k + ".y", s.y); y.set(k + ".z", s.z); y.set(k + ".scale", s.scale); y.set(k + ".fov", s.fov);
-        }
+        for (var e : settings.entrySet()) { String k = e.getKey().toString(); y.set(k + ".x", e.getValue().x); y.set(k + ".y", e.getValue().y); y.set(k + ".z", e.getValue().z); }
         try { y.save(file); } catch (Exception ex) { plugin.getLogger().warning("viewmodels.yml could not be saved: " + ex.getMessage()); }
     }
-
-    private static final double MAX_OFFSET = 1.0, MIN_FOV = 40, MAX_FOV = 110, MIN_SCALE = 0.3, MAX_SCALE = 2.0;
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!(sender instanceof Player p)) { sender.sendMessage("Players only."); return true; }
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) { help(p); return true; }
-        // optional gun id first: /viewmodel rifle offset ...
-        String gun = "*";
-        int i = 0;
-        if (plugin.registry.gun(args[0].toLowerCase(Locale.ROOT)) != null) { gun = args[0].toLowerCase(Locale.ROOT); i = 1; }
-        if (args.length <= i) { help(p); return true; }
-        Map<String, Setting> m = settings.computeIfAbsent(p.getUniqueId(), x -> new ConcurrentHashMap<>());
-        Setting s = m.computeIfAbsent(gun, x -> new Setting());
-        String sub = args[i].toLowerCase(Locale.ROOT);
-        try {
-            switch (sub) {
-                case "offset", "pos", "position" -> {
-                    if (args.length < i + 4) { p.sendMessage(Component.text("/viewmodel [gun] offset <right> <up> <forward>   (blocks, -1..1; e.g. 0.1 -0.05 0)", NamedTextColor.YELLOW)); return true; }
-                    s.x = clamp(Double.parseDouble(args[i + 1]), -MAX_OFFSET, MAX_OFFSET);
-                    s.y = clamp(Double.parseDouble(args[i + 2]), -MAX_OFFSET, MAX_OFFSET);
-                    s.z = clamp(Double.parseDouble(args[i + 3]), -MAX_OFFSET, MAX_OFFSET);
-                }
-                case "x" -> s.x = clamp(Double.parseDouble(args[i + 1]), -MAX_OFFSET, MAX_OFFSET);
-                case "y" -> s.y = clamp(Double.parseDouble(args[i + 1]), -MAX_OFFSET, MAX_OFFSET);
-                case "z" -> s.z = clamp(Double.parseDouble(args[i + 1]), -MAX_OFFSET, MAX_OFFSET);
-                case "fov" -> s.fov = clamp(Double.parseDouble(args[i + 1]), MIN_FOV, MAX_FOV);
-                case "scale", "size" -> s.scale = clamp(Double.parseDouble(args[i + 1]), MIN_SCALE, MAX_SCALE);
-                case "reset" -> { m.remove(gun); if (gun.equals("*")) m.clear(); }
-                case "show", "get" -> { }
-                default -> { help(p); return true; }
-            }
-        } catch (NumberFormatException | ArrayIndexOutOfBoundsException e) { p.sendMessage(Component.text("Numbers, please: /viewmodel [gun] offset <right> <up> <forward> | fov <40-110> | scale <0.3-2> | reset", NamedTextColor.RED)); return true; }
-        if (m.isEmpty()) settings.remove(p.getUniqueId());
+        String sub = args[0].toLowerCase(Locale.ROOT);
+        int i = sub.equals("offset") || sub.equals("set") ? 1 : 0;
+        if (sub.equals("reset")) { settings.remove(p.getUniqueId()); }
+        else if (sub.equals("show") || sub.equals("get")) { }
+        else {
+            if (args.length < i + 3) { help(p); return true; }
+            Setting s = new Setting();
+            try {
+                s.x = clamp(Double.parseDouble(args[i]));
+                s.y = clamp(Double.parseDouble(args[i + 1]));
+                s.z = clamp(Double.parseDouble(args[i + 2]));
+            } catch (NumberFormatException e) { p.sendMessage(Component.text("Three numbers, -5..5: /viewmodel <right> <up> <forward>", NamedTextColor.RED)); return true; }
+            if (s.isDefault()) settings.remove(p.getUniqueId()); else settings.put(p.getUniqueId(), s);
+        }
         save();
-        Setting now = of(p, gun);
-        p.sendMessage(Component.text("Viewmodel" + (gun.equals("*") ? "" : " for " + gun) + ": offset " + fmt(now.x) + " " + fmt(now.y) + " " + fmt(now.z) + ", fov " + fmt(now.fov) + ", scale " + fmt(now.scale), NamedTextColor.GREEN));
+        Setting now = of(p);
+        p.sendMessage(Component.text("Viewmodel offset: right " + fmt(now.x) + ", up " + fmt(now.y) + ", forward " + fmt(now.z) + (now.isDefault() ? " (stock)" : ""), NamedTextColor.GREEN));
         GunType held = plugin.registry.gunOf(p.getInventory().getItemInMainHand());
         if (held != null && !plugin.registry.displayMode(held.model()))
-            p.sendMessage(Component.text("(" + held.id() + " is a frame-mode gun: its placement is baked into the pack for everybody. The viewmodel applies to guns in display mode - guns.yml  anim: { mode: display }.)", NamedTextColor.GRAY));
+            p.sendMessage(Component.text("(" + held.id() + " is not on the display rig - its first person is baked into the pack. Guns follow /viewmodel in display mode: config anim.mode: display, then /firearms pack.)", NamedTextColor.GRAY));
         plugin.rig().refresh(p);
         return true;
     }
 
     private void help(Player p) {
-        p.sendMessage(Component.text("/viewmodel offset <right> <up> <forward>   move the gun (blocks, e.g. 0.1 -0.05 0.05)", NamedTextColor.YELLOW));
-        p.sendMessage(Component.text("/viewmodel fov <40-110>   60 = stock; higher = smaller, further gun (Counter-Strike's viewmodel_fov)", NamedTextColor.YELLOW));
-        p.sendMessage(Component.text("/viewmodel scale <0.3-2>   |   /viewmodel reset   |   /viewmodel show", NamedTextColor.YELLOW));
-        p.sendMessage(Component.text("Put a gun id first to set it for that gun only: /viewmodel rifle offset 0.2 0 0", NamedTextColor.GRAY));
-        p.sendMessage(Component.text("Yours only, applied at once; no pack reload. Works for guns in display mode.", NamedTextColor.GRAY));
+        p.sendMessage(Component.text("/viewmodel <right> <up> <forward>   move your guns on screen; each -5..5, 1 = one sixteenth of a block (a model pixel)", NamedTextColor.YELLOW));
+        p.sendMessage(Component.text("/viewmodel reset   |   /viewmodel show", NamedTextColor.YELLOW));
+        p.sendMessage(Component.text("Yours only, every gun, applied at once; no pack reload.", NamedTextColor.GRAY));
     }
 
-    private static double clamp(double v, double lo, double hi) { return Math.max(lo, Math.min(hi, v)); }
-    private static String fmt(double v) { return String.valueOf(Math.round(v * 1000) / 1000.0); }
+    private static String fmt(double v) { return String.valueOf(Math.round(v * 100) / 100.0); }
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         List<String> out = new ArrayList<>();
-        if (args.length == 1) { out.addAll(List.of("offset", "fov", "scale", "reset", "show")); out.addAll(plugin.registry.gunIds()); }
-        else if (args.length == 2 && plugin.registry.gun(args[0].toLowerCase(Locale.ROOT)) != null) out.addAll(List.of("offset", "fov", "scale", "reset", "show"));
+        if (args.length == 1) out.addAll(List.of("0", "reset", "show"));
+        else if (args.length <= 3) out.add("0");
         String last = args.length == 0 ? "" : args[args.length - 1].toLowerCase(Locale.ROOT);
         out.removeIf(x -> !x.startsWith(last));
         return out;

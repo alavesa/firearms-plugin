@@ -11,6 +11,10 @@ gun-item: CROSSBOW
 item-base: BRICK
 
 # ---- Hold-to-fire detection (AUTO guns) ----
+# Per gun, guns.yml fire-detect: barrier (default, below) or rhythm (no barrier: a second tap within rhythm-window-ticks
+# of the first counts as "held" and the gun keeps firing at its rate while taps keep coming; tap once = one shot).
+# The client sends ONE packet per left click on air or an entity and nothing while the button stays down, so rhythm
+# cannot see a real hold - it is the tap cadence. Test it on the experimental gun before giving it to real guns.
 # Minecraft's client only repeats the arm swing while it is MINING a block under the crosshair, so while an
 # AUTO gun is held an invisible, unbreakable BARRIER is shown to you only, this many blocks out on your
 # crosshair (you see its thin wireframe outline; the server never has it, bullets pass, nobody else sees it).
@@ -24,6 +28,7 @@ hold:
   min-distance: 3.0      # a BLOCK never makes the barrier appear nearer than this (grass fields); entities may (1.2)
   mining-fatigue: true   # hidden Mining Fatigue III while any gun is held (no cracks, no breaking)
   no-dip: true           # huge attack_speed while a gun is held, so the gun never dips below the screen after a click
+  rhythm-window-ticks: 6 # fire-detect: rhythm - taps this close together (ticks) are read as a held trigger
 
 # ---- Ballistics ----
 ballistics:
@@ -64,6 +69,8 @@ bypass-pvp: true
 damage:
   hurt-animation: false   # false = no red flash / hurt wobble on the victim: health is lowered directly (lethal hits
                           # still go through the normal damage so the kill is credited). true = vanilla hurt effect.
+# Splatters and craters are item displays lit by the block they lie on (no fixed brightness since 0.27, so they are
+# dark in the dark like everything else).
 blood:
   enabled: true
   range: 4.0             # how far behind the victim a wall can be for a splatter
@@ -211,6 +218,9 @@ weight:
   speed-per-kg: 0.012    # walk-speed penalty per kg while the gun is held (3 kg = -3.6 %)
 
 # ---- Recoil ----
+# Camera shake: guns.yml `shake: <degrees>` adds random yaw/pitch jitter over these ticks that sums to zero (the view
+# wobbles and lands back where it was) on top of the kick. Every recoil here is the camera; the GUN's own kick is the
+# animation - or, for a `shader: true` gun, the core shader (see pack.shaders).
 recoil:
   ticks: 3               # the kick is spread over this many ticks (packet-driven, no teleports)
   aim-multiplier: 0.5    # recoil while sneaking
@@ -235,14 +245,14 @@ accuracy:
 anim:
   # composite (default): every animated group is its own sub-model with an EXACT display transform per frame
   #   (frames in the pack, 20 per second at most, shown by swapping the held item's model).
-  # display: the first-person gun is a RIG of client-side item_display entities (one per part) riding the player and
+  # display (DEFAULT since 0.27): the first-person gun is a RIG of client-side item_display entities (one per part) riding the player and
   #   billboarded to the camera; the client interpolates every pose change itself, so the animation is as smooth as
   #   the player's frame rate, and the pack holds only the part geometry (no frames, tiny pack, no client memory
   #   problem). Hands with the player's skin work the same way. Trade-offs: the gun is a world entity, so it clips
   #   into walls you stand against, scales with the FOV setting, shows in F5, and costs one packet per moving part
   #   per tick. Per gun: guns.yml  anim: { mode: display }. Tune display.rig below. Needs a client to judge.
   # baked: the older single-model mode (rotations rounded to 22.5 steps).
-  mode: composite
+  mode: display
   frame-ticks: 1         # ticks between sampled frames (1 = one frame per server tick, the most the client can be shown)
   max-frames: 200        # cap per clip (per gun: guns.yml anim.max-frames); a capped clip is reported by /firearms pack
   # Frames whose pose is identical to the previous one are not written: the previous frame simply holds, and
@@ -281,6 +291,10 @@ anim:
   root-position-sign: [1, 1, 1]
 
 # ---- Display rig (anim.mode: display) ----
+# Why the rig is the default: it is the only first person that can follow each player's own /viewmodel offset, and
+# the only one the client's screen post effects reach - since 26.3 the held item is drawn into its own "3D HUD" layer
+# AFTER the post effects (night vision goggles via /posteffect, the flashbang...), as an item_display it is part of the
+# world and gets them. Opt a gun out with guns.yml  anim: { mode: composite }  (frames baked into the pack).
 display:
   rig:
     hand: [0.56, -0.52, -0.72]   # where vanilla draws a first-person item, in view space (right, up, back) - do not touch
@@ -317,8 +331,21 @@ hit-animations:
     # legs_left: hit_legs_left
     # legs_right: hit_legs_right
 
+# ---- Flashbang (grenades.yml kind: flash) ----
+# The white screen is a post effect from the pack (firearms:flash_1..flash_<levels>, built by /firearms pack), switched
+# per tick as it fades - the 26.3 per-player post-effect list, the same one /posteffect uses. Without post effects
+# (servers before 26.3) the player gets Blindness for the same time instead.
+flashbang:
+  levels: 10             # how many whiteness steps the pack carries (more = smoother fade, more files)
+  hold-ticks: 12         # full white this long (scaled by how hard the flash hit) before it fades
+  fallback-blindness: true
+
 # ---- Resource pack generator ----
 pack:
+  # Core shaders and post effects baked into the pack (26.3 clients): assets/minecraft/shaders/core/item.vsh with the
+  # recoil/sway signal decode for `shader: true` guns, and the flashbang post effects. false = a pack without shaders
+  # (no flashbang white, no GPU recoil; everything else works).
+  shaders: true
   include-hidden-cubes: false   # cubes hidden in Blockbench (eye icon) are left out and reported; true keeps them
   # CLIENT MEMORY. The client bakes the geometry of a part again for every pose it appears in, so a pack costs every
   # player roughly cubes x faces x frames x 200 bytes of RAM - three TaCZ guns were 6 million quads, over 1 GB, which

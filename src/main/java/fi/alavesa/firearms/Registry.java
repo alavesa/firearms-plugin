@@ -95,6 +95,22 @@ public final class Registry {
         File mf = new File(plugin.getDataFolder(), "mags.yml");
         if (!gf.exists()) plugin.saveResource("guns.yml", false);
         if (!mf.exists()) plugin.saveResource("mags.yml", false);
+        // 0.27 added the experimental gun and the flashbang: append them ONCE to existing files (never anything the
+        // server removed on purpose), so the update can be tried without editing yml by hand.
+        if (!plugin.getConfig().getBoolean("merged-027", false)) {
+            mergeDefaults(gf, "guns.yml", "guns", List.of("experimental"));
+            mergeDefaults(grf, "grenades.yml", "grenades", List.of("flashbang"));
+            plugin.getConfig().set("merged-027", true);
+            plugin.saveConfig();
+            ConfigurationSection again = YamlConfiguration.loadConfiguration(grf).getConfigurationSection("grenades");
+            if (again != null) for (String id : again.getKeys(false)) {
+                ConfigurationSection s = again.getConfigurationSection(id);
+                if (s == null || grenades.containsKey(id.toLowerCase())) continue;
+                grenades.put(id.toLowerCase(), new GrenadeType(id.toLowerCase(), s.getString("name", id), s.getString("model", "grenade_" + id.toLowerCase()),
+                    s.getString("kind", "frag").toLowerCase(), s.getDouble("fuse", 3), s.getBoolean("cook", false), s.getDouble("radius", 4),
+                    s.getDouble("damage", 12), s.getDouble("duration", 10), s.getDouble("speed", 1.2)));
+            }
+        }
         YamlConfiguration g = YamlConfiguration.loadConfiguration(gf);
         YamlConfiguration m = YamlConfiguration.loadConfiguration(mf);
 
@@ -157,7 +173,10 @@ public final class Registry {
                 s.getDouble("equip-seconds", 0),
                 s.getStringList("hide-groups"),
                 s.getStringList("skip-animations"),
-                s.getDouble("knockback", plugin.getConfig().getDouble("knockback.default", 0.08))));
+                s.getDouble("knockback", plugin.getConfig().getDouble("knockback.default", 0.08)),
+                s.getString("fire-detect", "barrier").trim().toLowerCase(),
+                s.getBoolean("shader", false),
+                Math.max(0, s.getDouble("shake", 0))));
         }
         // Animation frame index written by the pack generator.
         File ai = new File(new File(plugin.getDataFolder(), "models"), "anim-index.yml");
@@ -188,6 +207,29 @@ public final class Registry {
                 clipNames.put(model, names);
             }
         }
+    }
+
+    /** Copy the named entries of a jar default file into the server's file when they are missing there. */
+    private void mergeDefaults(File file, String resource, String section, List<String> ids) {
+        try (java.io.InputStream in = plugin.getResource(resource)) {
+            if (in == null || !file.exists()) return;
+            YamlConfiguration def = YamlConfiguration.loadConfiguration(new java.io.InputStreamReader(in, java.nio.charset.StandardCharsets.UTF_8));
+            YamlConfiguration cur = YamlConfiguration.loadConfiguration(file);
+            ConfigurationSection ds = def.getConfigurationSection(section);
+            if (ds == null) return;
+            ConfigurationSection cs = cur.getConfigurationSection(section);
+            if (cs == null) cs = cur.createSection(section);
+            List<String> added = new ArrayList<>();
+            for (String id : ids) {
+                ConfigurationSection d = ds.getConfigurationSection(id);
+                if (d == null || cs.contains(id)) continue;
+                cs.set(id, d.getValues(true));
+                added.add(id);
+            }
+            if (added.isEmpty()) return;
+            cur.save(file);
+            plugin.getLogger().info(resource + ": added " + added + " (new in 0.27)");
+        } catch (Exception e) { plugin.getLogger().warning(resource + ": could not add the 0.27 defaults: " + e); }
     }
 
     /** "a,b,c" -> double[3], or def when it does not parse. */
@@ -620,6 +662,9 @@ public final class Registry {
 
     /** Apply one item component through the vanilla item-string parser; null if this server rejects it.
      *  NOTE: Paper prepends the item id itself - pass ONLY the "[component]" part. */
+    /** Apply one component ("minecraft:dyed_color=123") to a copy of the item; null when the server rejects it. */
+    static ItemStack withComponent(ItemStack item, String component) { ItemStack r = component(item, component, true); return r == null ? item : r; }
+
     private static ItemStack component(ItemStack item, String component, boolean quiet) {
         try {
             return Bukkit.getUnsafe().modifyItemStack(item, "[" + component + "]");

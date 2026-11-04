@@ -233,7 +233,7 @@ What only you can decide, per gun in guns.yml, because it changes what is in the
 Measured: the three guns as sent, 4.0 million quads (~770 MB); with the skip and hide lists above, about half of that.
 A client with 4 GB handles the latter; keep below about 1.5 million for 2 GB clients.
 
-## Display mode (0.25) - smooth first person without frames
+## Display mode (0.25, the default since 0.27) - smooth first person without frames
 
 `anim.mode: display` (or per gun `anim: { mode: display }`) draws the first-person gun as a **rig of client-side
 item_display entities**: one entity per part, riding the player and billboarded to the camera, so the client places

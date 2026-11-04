@@ -1,10 +1,11 @@
 # Grenades. LEFT-click throws: the "unpin" animation plays, then "throw", then the grenade leaves the hand.
-#  kind      frag | incendiary | smoke
+#  kind      frag | incendiary | smoke | flash (flashbang: a white screen for everyone in sight, see config flashbang:)
 #  fuse      seconds until the effect. cook: true = the fuse starts at the pin pull (the animations eat into it),
 #            cook: false = the fuse starts when the grenade leaves the hand
 #  radius    effect radius (blocks)
 #  damage    frag only: damage at the centre in half-hearts, linear falloff to the edge; walls shield
-#  duration  incendiary: seconds the ground burns; smoke: seconds the cloud lasts
+#  duration  incendiary: seconds the ground burns; smoke: seconds the cloud lasts; flash: seconds of white at point blank
+#            (shorter further away, with your back turned, and nothing at all behind a wall)
 #  speed     throw speed in blocks/tick
 #  model     custom_model_data string = models/<model>.bbmodel (placeholder if missing); icon = models/<model>_icon.png
 grenades:
@@ -35,3 +36,12 @@ grenades:
     radius: 4.0
     duration: 20
     speed: 1.2
+  flashbang:
+    name: "&fFlashbang"
+    model: grenade_flash
+    kind: flash
+    fuse: 1.6
+    cook: false
+    radius: 9.0
+    duration: 4.0
+    speed: 1.3

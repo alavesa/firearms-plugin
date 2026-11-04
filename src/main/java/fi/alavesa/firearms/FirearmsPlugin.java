@@ -29,7 +29,9 @@ public final class FirearmsPlugin extends JavaPlugin {
     PackHost packHost;
     DisplayRig rig;
     Viewmodels viewmodels;
+    Flash flash;
     public Viewmodels viewmodels() { return viewmodels; }
+    public Flash flash() { return flash; }
     public DisplayRig rig() { return rig; }
     public HitAnimations hitAnimations() { return hitAnimations; }
     public PackHost packHost() { return packHost; }
@@ -44,8 +46,17 @@ public final class FirearmsPlugin extends JavaPlugin {
             getConfig().set("arms-default-off", true);
             saveConfig();
         }
+        // 0.27: every gun is drawn by the display rig (anim.mode: display) - the only first person that can follow
+        // /viewmodel per player and that the client's post effects (night vision goggles...) reach. Flip an old config once.
+        if (!getConfig().getBoolean("display-default", false)) {
+            if (!"baked".equalsIgnoreCase(getConfig().getString("anim.mode", "display"))) getConfig().set("anim.mode", "display");
+            getConfig().set("display-default", true);
+            saveConfig();
+            getLogger().info("anim.mode set to display (0.27): run /firearms pack to rebuild the pack for the display rig.");
+        }
         registry = new Registry(this);
         registry.load();
+        flash = new Flash(this);
         ballistics = new Ballistics(this, registry);
         hold = new HoldDetector(this, registry);
         casings = new Casings(this, registry);
@@ -86,7 +97,8 @@ public final class FirearmsPlugin extends JavaPlugin {
             Registry.resetComponentProbe();
             for (GunType g : registry.guns()) { registry.buildGun(g); break; }
             getLogger().info("Components: swing-hide " + (Registry.swingOk ? "OK" : "unsupported") + ", adventure can_break "
-                + (Registry.canBreakOk ? "OK" : "unsupported") + "; packet recoil " + (NmsRecoil.available() ? "OK" : "fallback"));
+                + (Registry.canBreakOk ? "OK" : "unsupported") + "; packet recoil " + (NmsRecoil.available() ? "OK" : "fallback")
+                + "; post effects (flashbang) " + (PostEffects.available() ? "OK" : "unavailable - Blindness fallback") + "; display rig " + (NmsDisplay.available() ? "OK" : "unavailable: " + NmsDisplay.problem()));
         }, 100L);
         // The #1 reason an update "did nothing": an older Firearms-x.y.z.jar left next to the new one. Paper
         // then loads only ONE of them (the first by name = the OLD one). Shout about it in the console and to ops.
@@ -115,6 +127,7 @@ public final class FirearmsPlugin extends JavaPlugin {
     @Override
     public void onDisable() {
         if (rig != null) for (org.bukkit.entity.Player p : getServer().getOnlinePlayers()) rig.hide(p);
+        if (flash != null) flash.clearAll();
         if (packHost != null) packHost.stop();
         if (controller != null) controller.shutdown();
         if (hold != null) hold.clearAll();
