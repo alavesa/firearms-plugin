@@ -197,6 +197,7 @@ public final class FirearmsCommand implements CommandExecutor, TabCompleter {
         if (g == null) { sender.sendMessage(Component.text("Unknown gun: " + args[1] + " (" + String.join(", ", plugin.registry.gunIds()) + ")", NamedTextColor.RED)); return true; }
         File gf = new File(plugin.getDataFolder(), "guns.yml");
         org.bukkit.configuration.file.YamlConfiguration y = org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(gf);
+        if (args.length > 2 && (args[2].equalsIgnoreCase("aim") || args[2].equalsIgnoreCase("ads"))) return aimPose(sender, g, y, gf, args);
         int ai = 2;
         String ctx = "first";
         if (args.length > 2 && POSE_CTX.containsKey(args[2].toLowerCase())) { ctx = args[2].toLowerCase(); ai = 3; }
@@ -229,7 +230,34 @@ public final class FirearmsCommand implements CommandExecutor, TabCompleter {
         return true;
     }
 
-    private boolean poseUsage(CommandSender s) { s.sendMessage(Component.text("/firearms pose <gun> [first|third|gui|ground|fixed|head] offset <x> <y> <z> | rotate <x> <y> <z> | scale <s> | reset   (model px / degrees; ~ = keep, ~2 = add 2; no state = first)", NamedTextColor.YELLOW)); return true; }
+    /** /firearms pose <gun> aim offset|rotate|scale|reset: the gun's fixed aim state A on the display rig (guns.yml aim-pose),
+     *  applied to every rig at once - no pack rebuild, the client blends from the hip pose to it. */
+    private boolean aimPose(CommandSender sender, GunType g, org.bukkit.configuration.file.YamlConfiguration y, File gf, String[] args) {
+        String base = "guns." + g.id() + ".aim-pose.";
+        double[] off = vec3(y, base + "offset", new double[]{0, 0, 0}), rot = vec3(y, base + "rotation", new double[]{0, 0, 0});
+        double sc = y.getDouble(base + "scale", 1.0);
+        if (args.length <= 3) {
+            sender.sendMessage(Component.text(g.id() + " aim state (guns.yml aim-pose, on top of the model's aim clip): offset " + fmt(off) + " (sixteenths of a block: right, up, forward)  rotate " + fmt(rot) + "  scale " + sc, NamedTextColor.GOLD));
+            sender.sendMessage(Component.text("/firearms pose " + g.id() + " aim offset <r> <u> <f> | rotate <x> <y> <z> | scale <s> | reset   (~ = keep, ~2 = add 2; applied live)", NamedTextColor.YELLOW));
+            return true;
+        }
+        try {
+            switch (args[3].toLowerCase()) {
+                case "offset", "position", "move" -> { if (args.length < 7) return poseUsage(sender); for (int i = 0; i < 3; i++) off[i] = Math.max(-80, Math.min(80, rel(args[4 + i], off[i]))); y.set(base + "offset", list(off)); }
+                case "rotate", "rotation", "rot" -> { if (args.length < 7) return poseUsage(sender); for (int i = 0; i < 3; i++) rot[i] = rel(args[4 + i], rot[i]); y.set(base + "rotation", list(rot)); }
+                case "scale", "size" -> { if (args.length < 5) return poseUsage(sender); sc = Math.max(0.05, Math.min(4, rel(args[4], sc))); y.set(base + "scale", Math.round(sc * 1000) / 1000.0); }
+                case "reset", "clear" -> { y.set("guns." + g.id() + ".aim-pose", null); off = new double[3]; rot = new double[3]; sc = 1; }
+                default -> { return poseUsage(sender); }
+            }
+        } catch (NumberFormatException ex) { sender.sendMessage(Component.text("Numbers please: " + ex.getMessage(), NamedTextColor.RED)); return true; }
+        try { y.save(gf); } catch (java.io.IOException ex) { sender.sendMessage(Component.text("Could not write guns.yml: " + ex.getMessage(), NamedTextColor.RED)); return true; }
+        plugin.registry.load();
+        plugin.rig().refreshAll();
+        sender.sendMessage(Component.text(g.id() + " aim: offset " + fmt(off) + "  rotate " + fmt(rot) + "  scale " + sc + "  -> saved (aim-pose), applied to every rig now; hold right-click to see it", NamedTextColor.GREEN));
+        return true;
+    }
+
+    private boolean poseUsage(CommandSender s) { s.sendMessage(Component.text("/firearms pose <gun> [first|third|gui|ground|fixed|head|aim] offset <x> <y> <z> | rotate <x> <y> <z> | scale <s> | reset   (model px / degrees; ~ = keep, ~2 = add 2; no state = first; aim = the rig's aim state, live)", NamedTextColor.YELLOW)); return true; }
     private static double rel(String a, double cur) {
         if (a.equals("~")) return cur;
         if (a.startsWith("~")) return cur + Double.parseDouble(a.substring(1).replace(',', '.'));

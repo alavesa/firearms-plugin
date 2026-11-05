@@ -38,6 +38,7 @@ final class DisplayRig {
         double[][][] lastSent;                             // per part: last transform sent (null = hidden)
         String clip; int frame = -1; double stretch = 1; int startTick; Runnable then;
         boolean aiming, spawned;
+        boolean shownAiming;                               // the state the client was last sent (H = the player's hip pose, A = the fixed aim pose)
         double lastPitch = 1e9; boolean lastSneak;
     }
 
@@ -166,10 +167,14 @@ final class DisplayRig {
                 else duration = 0;
             } else {
                 float[][] want = a.aiming && a.poses.clips.containsKey("aim") ? a.poses.clips.get("aim").get(0) : a.poses.rest;
-                if (want != a.current) { a.current = want; duration = plugin.getConfig().getInt("display.rig.aim-ticks", 3); }
+                if (want != a.current) { a.current = want; duration = aimTicks(); }
                 else duration = 0;
             }
-            send(p, a, duration, false);
+            // H <-> A: the client interpolates every part (position and scale linearly, rotation as a quaternion) from
+            // where it is to the other state over aim-ticks, whatever the player's own /viewmodel hip offset is
+            boolean switchAim = a.aiming != a.shownAiming;
+            if (switchAim) { a.shownAiming = a.aiming; duration = Math.max(duration, aimTicks()); }
+            send(p, a, duration, switchAim);
         }
     }
 
@@ -182,7 +187,10 @@ final class DisplayRig {
         if (!all && duration == 0 && !cameraMoved) return;
         a.lastPitch = pitch; a.lastSneak = sneak;
         double[][] offC = eyeOffsetInCamera(pitch, sneak);
-        double[][] hand = handChain(a.poses, plugin.viewmodels() != null ? plugin.viewmodels().of(p) : new Viewmodels.Setting());
+        // H = the gun's hip pose + this player's /viewmodel offset; A = the fixed aim pose for everyone (guns.yml aim-pose,
+        // on top of the aim clip's end pose), with no player offset, so a customised H never moves the shared sight line
+        Viewmodels.Setting vm = a.aiming ? new Viewmodels.Setting() : plugin.viewmodels() != null ? plugin.viewmodels().of(p) : new Viewmodels.Setting();
+        double[][] hand = handChain(a.poses, vm, a.aiming ? a.gun.aimPose() : null);
         for (int i = 0; i < a.parts.size(); i++) {
             NmsDisplay.Part part = a.parts.get(i);
             if (part == null) continue;
@@ -200,16 +208,31 @@ final class DisplayRig {
     // ---------------------------------------------------------------- the maths
 
     /** T(hand) T(tr/16) R(rot) S(sc) T(-0.5): the gun's own first-person transform, then vanilla's hand placement. */
-    private double[][] handChain(ModelPoses mp, Viewmodels.Setting vm) {
+    private double[][] handChain(ModelPoses mp, Viewmodels.Setting vm, org.bukkit.configuration.ConfigurationSection aimPose) {
         double[] h = list3("display.rig.hand", new double[]{0.56, -0.52, -0.72});
         double[] extra = list3("display.rig.offset", new double[]{0, 0, 0});
         // the player's own /viewmodel offset (right, up, forward -> view -z), in sixteenths of a block
         double[][] t = translate(h[0] + extra[0] + vm.x / 16.0, h[1] + extra[1] + vm.y / 16.0, h[2] + extra[2] - vm.z / 16.0);
+        if (aimPose != null) {
+            // the gun's aim-state adjust (guns.yml aim-pose / `/firearms pose <gun> aim ...`): offset in sixteenths of a block
+            // (right, up, forward), rotation in degrees and a scale, applied about the hand point in view space
+            double[] off = vec3(aimPose, "offset", new double[]{0, 0, 0}), rot = vec3(aimPose, "rotation", new double[]{0, 0, 0});
+            double sc0 = aimPose.getDouble("scale", 1.0);
+            double[][] adj = mul(mul(mul(translate(h[0] + off[0] / 16.0, h[1] + off[1] / 16.0, h[2] - off[2] / 16.0), rotXYZ(rot)), scale(sc0, sc0, sc0)), translate(-h[0], -h[1], -h[2]));
+            t = mul(adj, t);
+        }
         double[][] tr = translate(mp.fpTranslation[0] / 16, mp.fpTranslation[1] / 16, mp.fpTranslation[2] / 16);
         double[][] r = rotXYZ(mp.fpRotation);
         double[][] sc = scale(mp.fpScale[0], mp.fpScale[1], mp.fpScale[2]);
         return mul(mul(mul(mul(t, tr), r), sc), translate(-0.5, -0.5, -0.5));
     }
+    private int aimTicks() { return Math.max(1, plugin.getConfig().getInt("display.rig.aim-ticks", 4)); }
+    private static double[] vec3(org.bukkit.configuration.ConfigurationSection c, String key, double[] def) {
+        List<Double> l = c.getDoubleList(key);
+        return l.size() == 3 ? new double[]{l.get(0), l.get(1), l.get(2)} : def;
+    }
+    /** Re-send every rig (after an aim-pose edit). */
+    void refreshAll() { for (Player p : plugin.getServer().getOnlinePlayers()) refresh(p); }
 
     /** The entity transformation that puts part i where the item renderer would draw it, in the display's own frame. */
     private double[][] transformFor(ModelPoses mp, int i, float[] m, double[][] hand, double[][] offC) {

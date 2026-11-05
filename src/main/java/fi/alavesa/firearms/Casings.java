@@ -60,7 +60,7 @@ public final class Casings {
             d.setTeleportDuration(1);
             d.setInterpolationDuration(1);
             d.setInterpolationDelay(0);
-            d.setBrightness(new Display.Brightness(10, 15));
+            // no brightness override: a casing is lit by the block it lands in, like any item (dark in the dark)
             d.setTransformation(new Transformation(new Vector3f(), rot(s.spinAxis, s.angle), new Vector3f(scale, scale, scale), new Quaternionf()));
             d.addScoreboardTag("firearms_casing");
         });

@@ -304,7 +304,9 @@ display:
     offset: [0, 0, 0]            # extra view-space nudge for the whole rig (blocks): right, up, back
     eye-offset: 0.18             # the rig rides at the player's passenger point, this much above the eyes (standing)
     eye-offset-sneak: 0.23       # ... and while sneaking
-    aim-ticks: 3                 # ticks the client blends into / out of the aim pose
+    aim-ticks: 4                 # ticks the client blends between the hip pose H (yours, with your /viewmodel offset) and
+                                 # the aim pose A (the same for everyone: the aim clip's end + guns.yml aim-pose). Position
+                                 # and scale are interpolated linearly, rotation as a quaternion, by the client.
     view-range: 1.0
 
 # ---- Third person ----

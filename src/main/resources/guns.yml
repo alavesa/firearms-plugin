@@ -53,6 +53,9 @@
 #                   arms: { right: { pos: [10.5, 1, 11.5], rotation: [-45, 0, 0] }, left: { enabled: true, pos: [5, 3, 4], rotation: [-45, 0, 22.5] } }
 #  SOUNDS         sound keyframes in the .bbmodel (Blockbench "Effects" animator) are exported too: put the .ogg
 #                 files in plugins/Firearms/models/sounds/<effect name>.ogg - they play in sync with the clip.
+#  aim-pose       the rig's AIM state on top of the model's aim clip, the same for every player whatever their /viewmodel:
+#                   aim-pose: { offset: [right, up, forward], rotation: [x, y, z], scale: 1.0 }   (sixteenths of a block / degrees)
+#                 Set it in game, live, without a pack rebuild:  /firearms pose <gun> aim offset|rotate|scale|reset ...
 #  fire-detect    barrier (default: the client-side mining barrier reads a held trigger) | rhythm (no barrier; two taps
 #                 within config hold.rhythm-window-ticks = held, keeps firing while taps keep coming) - EXPERIMENTAL
 #  shake          camera shake per shot in degrees: random yaw/pitch jitter over the recoil ticks that lands back on centre

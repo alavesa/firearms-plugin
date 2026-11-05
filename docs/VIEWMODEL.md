@@ -16,6 +16,12 @@ entities are per player, so the offset is per player. Core shaders could also do
 has no per-player input (the pack is shared), so it would need a signal baked into item data; 0.27 tried that
 route for recoil, it broke pack loading, and it is gone.
 
+## Aiming uses the same entities
+
+The rig also does the aim: your hip pose H (with your offset) blends to a fixed aim pose A shared by everyone and
+back, interpolated by the client (`display.rig.aim-ticks`). A is tuned live with `/firearms pose <gun> aim ...`;
+see FIREARMS.md *Aiming on the rig*.
+
 ## What each `/firearms rig` line means
 
 1. **server can build rigs** - the plugin found the server's `item_display` classes (26.3 moved them to

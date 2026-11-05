@@ -55,6 +55,19 @@ once, then `/firearms pack`. Frames mode stays available per gun. docs/VIEWMODEL
 0.27 also put a core shader into the pack for GPU recoil; 26.3 clients rejected it and with it the whole pack, so
 0.28 carries no shaders at all. Recoil is a smooth camera movement instead (config `recoil:`).
 
+## Aiming on the rig: H and A (0.29)
+
+On the display rig every part is an `item_display` whose transformation the server sets and the client
+interpolates (position and scale linearly, rotation as a quaternion), so nothing about placement ever needs a pack
+change: `/viewmodel` moves it live, and so does aiming. Each player has their own hip pose **H** = the gun's
+first-person pose plus their `/viewmodel` offset. The aim pose **A** is the same for everyone: the end of the
+model's `aim` clip plus the gun's `aim-pose` from guns.yml, with no player offset at all, so a customised H never
+moves the shared sight line. Hold right-click and the client blends every part from wherever it is to A over
+`display.rig.aim-ticks`; release and it blends back to H. Set A in game, live: `/firearms pose <gun> aim offset
+<right> <up> <forward> | rotate <x> <y> <z> | scale <s> | reset` (sixteenths of a block, degrees); it is written to
+guns.yml `aim-pose` and applied to every rig at once, no rebuild. Animations work the same way: every clip is a pose
+per tick sent to the rig and blended by the client, no frame models in the pack (ANIMATIONS.md *Display mode*).
+
 ## Flashbang (0.27, no shaders since 0.28)
 
 `grenades.yml kind: flash`: everyone within `radius` with a line of sight gets a white screen, strongest near and
@@ -103,6 +116,7 @@ Try rhythm on the experimental gun; if it feels right it can be set on any gun w
 | `/firearms models` | which model files are expected and found |
 | `/firearms host` | pack delivery status |
 | `/firearms rig` | why `/viewmodel` does or does not move the held gun: six checks, see docs/VIEWMODEL.md |
+| `/firearms pose <gun> aim offset|rotate|scale|reset ...` | the rig's shared aim state A, applied live |
 | `/firearms reload` | re-read the configs |
 
 Permissions: `firearms.use` (default), `firearms.give` and `firearms.admin` (ops).
@@ -192,6 +206,8 @@ the thing to send along with the model file.
 | an auto rifle fires one shot per click | guns.yml `fire-mode: "semi,auto"`: since right-click became aiming (0.19) such guns were read as semi; since 0.26 they are AUTO, and `/firearms mode` toggles the held gun between auto and semi |
 | `/viewmodel` changed nothing | `/firearms rig` with the gun in hand says which link is missing; docs/VIEWMODEL.md explains why it has to be entities, not items. Before 0.27 the default was frames and the rig failed to start on 26.3; in 0.27 the pack's core shader made clients reject the whole pack. 0.28: no shaders, `anim.mode: display`, `/firearms pack` |
 | the pack fails to apply on the client (0.27) | the core shader in the pack; removed in 0.28, rebuild with `/firearms pack` |
+| casings, splatters or holes glow at night | all decal and casing displays take the light of their block since 0.29 (casings) / 0.27 (decals); no fixed brightness anywhere |
+| animated blood / bullet holes | a texture that is a vertical strip of square frames gets a `.png.mcmeta` automatically (frame time and interpolation from Blockbench's texture settings), or put `blood_1.png.mcmeta` next to `blood_1.png` in `models/` and it is copied as is |
 | recoil feels like a jolt | `recoil.kick-ticks` (8 = smooth; 3 = the old kick), `recoil.recovery` and `recovery-ticks` - the kick is an eased camera movement, rotation packets only |
 | the gun is not affected by night vision / a post effect | the vanilla held item is drawn after the post effects since 26.3; a gun on the display rig (default since 0.27) is a world entity and gets them |
 | blood splatters / craters glow in the dark | until 0.27 decals had a fixed brightness; now they take the light of the block they lie on. Not a texture setting: `ambientocclusion` only affects block models |

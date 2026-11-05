@@ -44,7 +44,8 @@ public record GunType(
     java.util.List<String> skipAnimations,  // .bbmodel animation names (or patterns with *) not baked at all, e.g. [*_semi*]
     double knockback,       // push on the SHOOTER per shot, blocks per tick against the aim (added to their motion: a nudge, not a stop)
     String fireDetect,      // how a held trigger is detected: "barrier" (client-side mining stream, the default) or "rhythm" (tap cadence only)
-    double shake            // camera shake per shot: random extra yaw/pitch jitter in degrees over the recoil ticks, returning to centre
+    double shake,           // camera shake per shot: random extra yaw/pitch jitter in degrees over the recoil ticks, returning to centre
+    org.bukkit.configuration.ConfigurationSection aimPose   // guns.yml aim-pose: the fixed aim-state transform A of the display rig (offset/rotation/scale in view space)
 ) {
     public boolean rhythm() { return "rhythm".equalsIgnoreCase(fireDetect); }
     public long shotIntervalMs() { return fireRate <= 0 ? 1000 : Math.round(1000.0 / fireRate); }

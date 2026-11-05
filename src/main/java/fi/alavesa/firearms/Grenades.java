@@ -124,7 +124,6 @@ public final class Grenades implements Listener {
             d.setPersistent(false);
             d.setTeleportDuration(1);
             d.setInterpolationDuration(1);
-            d.setBrightness(new Display.Brightness(10, 15));
             d.setTransformation(new Transformation(new Vector3f(), new Quaternionf(), new Vector3f(0.5f, 0.5f, 0.5f), new Quaternionf()));
             d.addScoreboardTag("firearms_grenade");
         });

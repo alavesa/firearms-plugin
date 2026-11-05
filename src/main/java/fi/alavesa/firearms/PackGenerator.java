@@ -268,6 +268,25 @@ public final class PackGenerator {
         report.add("flashbang: font " + NS + ":flash (one white glyph shown as a fading title)");
     }
 
+    /** Animated textures (0.29): a texture that is a vertical strip of square frames gets a .png.mcmeta so the client
+     *  plays it - frame time and interpolation from Blockbench's texture settings (frame_time, frame_interpolate) when
+     *  the texture came from a .bbmodel, or from a `<name>.png.mcmeta` you put next to a loose png (copied as is).
+     *  Works for blood splatters, bullet holes and any model texture. */
+    private void animatedTexture(File source, byte[] png, String packPath, JsonObject bbTexture) throws IOException {
+        File sidecar = source == null ? null : new File(source.getPath() + ".mcmeta");
+        if (sidecar != null && sidecar.isFile()) { putBytes(packPath + ".mcmeta", Files.readAllBytes(sidecar.toPath())); report.add("animated texture: " + sidecar.getName() + " copied"); return; }
+        BufferedImage img;
+        try { img = ImageIO.read(new java.io.ByteArrayInputStream(png)); } catch (Exception e) { return; }
+        if (img == null || img.getHeight() <= img.getWidth() || img.getHeight() % img.getWidth() != 0) return;   // not a strip of square frames
+        JsonObject anim = new JsonObject();
+        int frameTime = bbTexture != null && bbTexture.has("frame_time") ? Math.max(1, (int) num(bbTexture.get("frame_time"), 1)) : 1;
+        anim.addProperty("frametime", frameTime);
+        if (bbTexture != null && bbTexture.has("frame_interpolate") && bbTexture.get("frame_interpolate").isJsonPrimitive() && bbTexture.get("frame_interpolate").getAsBoolean()) anim.addProperty("interpolate", true);
+        JsonObject root = new JsonObject(); root.add("animation", anim);
+        put(packPath + ".mcmeta", GSON.toJson(root));
+        report.add("animated texture: " + packPath.substring(packPath.lastIndexOf('/') + 1) + " - " + (img.getHeight() / img.getWidth()) + " frames, " + frameTime + " tick(s) each" + (anim.has("interpolate") ? ", interpolated" : ""));
+    }
+
     private static byte[] whitePng(int w, int h) throws IOException {
         java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_ARGB);
         int[] px = new int[w * h]; java.util.Arrays.fill(px, 0xFFFFFFFF);
@@ -673,6 +692,7 @@ public final class PackGenerator {
                 File custom = new File(dir, name + ".png");
                 byte[] png = custom.exists() ? Files.readAllBytes(custom.toPath()) : craterPng();
                 files.put("assets/" + NS + "/textures/item/" + path(name) + ".png", png);
+                animatedTexture(custom, png, "assets/" + NS + "/textures/item/" + path(name) + ".png", null);
                 tex.addProperty("0", NS + ":item/" + path(name));
                 tex.addProperty("particle", NS + ":item/" + path(name));
                 elements.add(cube(new double[]{0, 0, 7.9}, new double[]{16, 16, 8.1}, "#0", new double[]{0, 0, 16, 16}, null));
@@ -686,6 +706,7 @@ public final class PackGenerator {
                 // stains differ in shape and tone, not only in size; nothing = a generated splatter per variant
                 byte[] png = custom.exists() ? Files.readAllBytes(custom.toPath()) : shared.exists() ? variantPng(Files.readAllBytes(shared.toPath()), variantNo) : bloodPng(name.hashCode() * 31 + variantNo);
                 files.put("assets/" + NS + "/textures/item/" + path(name) + ".png", png);
+                animatedTexture(custom.exists() ? custom : shared, png, "assets/" + NS + "/textures/item/" + path(name) + ".png", null);
                 tex.addProperty("0", NS + ":item/" + path(name));
                 tex.addProperty("particle", NS + ":item/" + path(name));
                 elements.add(cube(new double[]{0, 0, 7.9}, new double[]{16, 16, 8.1}, "#0", new double[]{0, 0, 16, 16}, null));
@@ -1131,6 +1152,7 @@ public final class PackGenerator {
                 byte[] png = Base64.getDecoder().decode(src.substring(src.indexOf("base64,") + 7));
                 putBytes("assets/" + NS + "/textures/item/" + mpath + "/" + tname + ".png", png);
                 try { img = ImageIO.read(new java.io.ByteArrayInputStream(png)); } catch (Exception ignored) { }
+                animatedTexture(new File(new File(plugin.getDataFolder(), "models"), name + "." + tname + ".png"), png, "assets/" + NS + "/textures/item/" + mpath + "/" + tname + ".png", t);
             } else {
                 warnings.add(name + ": texture " + tname + " has no embedded image");
             }

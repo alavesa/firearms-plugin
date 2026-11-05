@@ -175,7 +175,8 @@ public final class Registry {
                 s.getStringList("skip-animations"),
                 s.getDouble("knockback", plugin.getConfig().getDouble("knockback.default", 0.08)),
                 s.getString("fire-detect", "barrier").trim().toLowerCase(),
-                Math.max(0, s.getDouble("shake", 0))));
+                Math.max(0, s.getDouble("shake", 0)),
+                s.getConfigurationSection("aim-pose")));
         }
         // Animation frame index written by the pack generator.
         File ai = new File(new File(plugin.getDataFolder(), "models"), "anim-index.yml");
