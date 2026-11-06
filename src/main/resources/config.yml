@@ -1,4 +1,6 @@
 # ================================ FIREARMS ================================
+# Minecraft 26.3 / Paper 26.3. The first-person gun is a rig of client-side item_display entities (see display.rig),
+# verified on a real 26.3 client in 0.30.
 # CONTROLS:  LEFT-click = fire (SEMI: one shot per click; AUTO: hold to spray, release to stop)
 #            HOLD RIGHT-click = aim down the sight (zoom + the gun's aim pose), with a gun in hand
 #            F          = reload (magazine swap, or one round at a time for pump-action guns)
@@ -308,6 +310,13 @@ display:
                                  # the aim pose A (the same for everyone: the aim clip's end + guns.yml aim-pose). Position
                                  # and scale are interpolated linearly, rotation as a quaternion, by the client.
     view-range: 1.0
+    # Where the gun sits while AIMING (A), in un-zoomed view units: right, up, forward (negative = ahead). The same for
+    # everyone; the default puts an M4's iron sights on the crosshair with the whole gun visible below the eye line. Nearer
+    # (e.g. -0.5) = the view through the rear aperture with the stock clipped by the camera. Per gun on top: guns.yml aim-pose.
+    aim-hand: [0.06, -0.235, -1.1]
+    aim-straight: true           # aiming drops the model's hip cant so the barrel runs parallel to the view
+    debug: false                 # log the first parts' transforms when a rig is (re)sent
+    static-test: false           # diagnostic: park the parts 2 blocks ahead, not riding - "do the entities show at all?"
 
 # ---- Third person ----
 # Every gun frame carries its pose as per-part (bone) display rotations, and those exist only in the first-person
@@ -382,6 +391,7 @@ pack:
     url: ""
     required: false
     prompt: "Firearms gun models"
-  # pack.mcmeta: a wide min/max range so every 1.21.4+ / 26.x client accepts the pack without a warning
-  min-format: 46
+  # pack.mcmeta: 97 = Minecraft 26.3. Never below 65: a 26.x client REJECTS such a pack outright ("Error reading pack
+  # metadata") and nothing of it applies - that was the invisible-guns bug of 0.27-0.29. Values below 65 are raised to 97.
+  min-format: 97
   max-format: 999

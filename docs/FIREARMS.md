@@ -63,7 +63,10 @@ change: `/viewmodel` moves it live, and so does aiming. Each player has their ow
 first-person pose plus their `/viewmodel` offset. The aim pose **A** is the same for everyone: the end of the
 model's `aim` clip plus the gun's `aim-pose` from guns.yml, with no player offset at all, so a customised H never
 moves the shared sight line. Hold right-click and the client blends every part from wherever it is to A over
-`display.rig.aim-ticks`; release and it blends back to H. Set A in game, live: `/firearms pose <gun> aim offset
+`display.rig.aim-ticks`; release and it blends back to H. Where A sits for every gun is `display.rig.aim-hand`
+(un-zoomed view units; the default puts an M4's sights on the crosshair with the gun below the eye line, verified
+on a client); aiming also drops the model's hip cant (`aim-straight`) and compensates the field-of-view zoom, so the
+rig keeps its screen size. Set A in game, live: `/firearms pose <gun> aim offset
 <right> <up> <forward> | rotate <x> <y> <z> | scale <s> | reset` (sixteenths of a block, degrees); it is written to
 guns.yml `aim-pose` and applied to every rig at once, no rebuild. Animations work the same way: every clip is a pose
 per tick sent to the rig and blended by the client, no frame models in the pack (ANIMATIONS.md *Display mode*).
@@ -117,6 +120,8 @@ Try rhythm on the experimental gun; if it feels right it can be set on any gun w
 | `/firearms host` | pack delivery status |
 | `/firearms rig` | why `/viewmodel` does or does not move the held gun: six checks, see docs/VIEWMODEL.md |
 | `/firearms pose <gun> aim offset|rotate|scale|reset ...` | the rig's shared aim state A, applied live |
+| `/firearms aim <player> on|off`, `/firearms fire <player>` | testing from the console: hold the sight, fire one shot |
+| `/viewmodel <player> ...` | admins: set another player's offset |
 | `/firearms reload` | re-read the configs |
 
 Permissions: `firearms.use` (default), `firearms.give` and `firearms.admin` (ops).
@@ -204,6 +209,7 @@ the thing to send along with the model file.
 | --- | --- |
 | why the invisible barrier for holding the trigger | the Minecraft client reports a held left button only while it is mining a block under the crosshair (clicking air or an entity sends one swing per press, holding sends nothing more - checked in the client: attacks happen on key presses, only block mining repeats). A client-side, unbreakable barrier kept ahead on the crosshair ray is therefore the only vanilla way to know the button is still down. Everything about it is tunable under `hold:` in config.yml; set `hold.distance: 0` for tap-fire only |
 | an auto rifle fires one shot per click | guns.yml `fire-mode: "semi,auto"`: since right-click became aiming (0.19) such guns were read as semi; since 0.26 they are AUTO, and `/firearms mode` toggles the held gun between auto and semi |
+| guns invisible in first person (0.27-0.29) | three stacked bugs, fixed in 0.30 and verified on a real client: the pack's `pack.mcmeta` format was rejected by 26.3, rig parts were spawned at 0,0,0, and the display frame was mirrored; see docs/VIEWMODEL.md |
 | `/viewmodel` changed nothing | `/firearms rig` with the gun in hand says which link is missing; docs/VIEWMODEL.md explains why it has to be entities, not items. Before 0.27 the default was frames and the rig failed to start on 26.3; in 0.27 the pack's core shader made clients reject the whole pack. 0.28: no shaders, `anim.mode: display`, `/firearms pack` |
 | the pack fails to apply on the client (0.27) | the core shader in the pack; removed in 0.28, rebuild with `/firearms pack` |
 | casings, splatters or holes glow at night | all decal and casing displays take the light of their block since 0.29 (casings) / 0.27 (decals); no fixed brightness anywhere |

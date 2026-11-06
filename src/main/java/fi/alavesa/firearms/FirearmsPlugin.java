@@ -33,6 +33,7 @@ public final class FirearmsPlugin extends JavaPlugin {
     public Viewmodels viewmodels() { return viewmodels; }
     public Flash flash() { return flash; }
     public DisplayRig rig() { return rig; }
+    public FireController controller() { return controller; }
     public HitAnimations hitAnimations() { return hitAnimations; }
     public PackHost packHost() { return packHost; }
 

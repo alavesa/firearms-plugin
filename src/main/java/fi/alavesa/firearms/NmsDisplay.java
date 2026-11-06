@@ -18,6 +18,8 @@ final class NmsDisplay {
     private static boolean ok;
     private static String problem = "not initialised";
     private static Constructor<?> itemDisplayCtor, addEntityCtor, setDataCtor, passengersCtor, removeCtor, transformationCtor, matrixCtor;
+    private static Method getUuid, getX, getY, getZ, getType;
+    private static Object vec3Zero;
     private static Object itemDisplayType, billboardCenter, contextFixed;
     private static Method setTransformation, setInterpDuration, setInterpDelay, setBillboard, setViewRange, setItemStack, setItemTransform,
         getId, getEntityData, nonDefaultValues, packDirty, setPos, asNms, worldHandle, matrixSet;
@@ -73,7 +75,12 @@ final class NmsDisplay {
             transformationCtor = transformation.getConstructor(matrix4fc);
             matrixCtor = matrix4f.getConstructor();
             matrixSet = matrix4f.getMethod("set", float.class, float.class, float.class, float.class, float.class, float.class, float.class, float.class, float.class, float.class, float.class, float.class, float.class, float.class, float.class, float.class);
-            addEntityCtor = Class.forName("net.minecraft.network.protocol.game.ClientboundAddEntityPacket").getConstructor(entity, int.class, Class.forName("net.minecraft.core.BlockPos"));
+            // the explicit constructor: the (Entity, int, BlockPos) one takes the POSITION from the BlockPos (it is for paintings),
+            // which put every rig part at 0,0,0 in 0.25-0.29 - the reason no rig was ever seen
+            Class<?> vec3 = Class.forName("net.minecraft.world.phys.Vec3");
+            vec3Zero = vec3.getField("ZERO").get(null);
+            addEntityCtor = Class.forName("net.minecraft.network.protocol.game.ClientboundAddEntityPacket").getConstructor(int.class, java.util.UUID.class, double.class, double.class, double.class, float.class, float.class, entityType, int.class, vec3, double.class);
+            getUuid = entity.getMethod("getUUID"); getX = entity.getMethod("getX"); getY = entity.getMethod("getY"); getZ = entity.getMethod("getZ"); getType = entity.getMethod("getType");
             setDataCtor = Class.forName("net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket").getConstructor(int.class, List.class);
             passengersCtor = Class.forName("net.minecraft.network.protocol.game.ClientboundSetPassengersPacket").getConstructor(entity);
             removeCtor = Class.forName("net.minecraft.network.protocol.game.ClientboundRemoveEntitiesPacket").getConstructor(int[].class);
@@ -123,11 +130,12 @@ final class NmsDisplay {
     }
 
     static void item(Part p, ItemStack stack) throws Exception { setItemStack.invoke(p.entity, asNms.invoke(null, stack)); }
+    static void moveTo(Part p, double x, double y, double z) throws Exception { setPos.invoke(p.entity, x, y, z); }
 
     /** Spawn packet + full metadata for a fresh part. */
     static void spawn(Player viewer, Part p) throws Exception {
         Object conn = NmsRecoil.connection(NmsRecoil.getHandle(viewer));
-        NmsRecoil.send(conn, addEntityCtor.newInstance(p.entity, 0, Class.forName("net.minecraft.core.BlockPos").getField("ZERO").get(null)));
+        NmsRecoil.send(conn, addEntityCtor.newInstance(p.id, getUuid.invoke(p.entity), getX.invoke(p.entity), getY.invoke(p.entity), getZ.invoke(p.entity), 0f, 0f, getType.invoke(p.entity), 0, vec3Zero, 0.0));
         Object data = getEntityData.invoke(p.entity);
         List<?> values = (List<?>) nonDefaultValues.invoke(data);
         if (values != null && !values.isEmpty()) NmsRecoil.send(conn, setDataCtor.newInstance(p.id, values));

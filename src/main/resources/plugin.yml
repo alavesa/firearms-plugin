@@ -13,10 +13,12 @@ commands:
       /firearms give <gun|mag|ammo id> [amount] [player]
       /firearms pack
       /firearms rig
+      /firearms aim <player> on|off
+      /firearms fire <player>
       /firearms reload
   viewmodel:
     description: Your own first-person gun offset (every gun, -5..5 per axis), applied at once
-    usage: /viewmodel <right> <up> <forward> | reset | show
+    usage: "/viewmodel <right> <up> <forward> | reset | show   (admins also /viewmodel <player> ...)"
 permissions:
   firearms.use:
     default: true

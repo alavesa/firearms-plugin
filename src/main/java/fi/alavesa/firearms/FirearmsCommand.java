@@ -127,6 +127,22 @@ public final class FirearmsCommand implements CommandExecutor, TabCompleter {
                 sender.sendMessage(Component.text("docs/VIEWMODEL.md explains each line.", NamedTextColor.DARK_GRAY));
                 return true;
             }
+            case "aim" -> {   // /firearms aim <player> on|off - hold/release the sight for testing from the console
+                if (!sender.hasPermission("firearms.admin")) return deny(sender);
+                Player t = args.length >= 2 ? Bukkit.getPlayerExact(args[1]) : sender instanceof Player pl ? pl : null;
+                if (t == null) { sender.sendMessage(Component.text("/firearms aim <player> on|off", NamedTextColor.YELLOW)); return true; }
+                boolean on = args.length < 3 || !args[2].equalsIgnoreCase("off");
+                plugin.controller().forceAim(t, on);
+                sender.sendMessage(Component.text(t.getName() + " aim " + (on ? "held" : "released"), NamedTextColor.GREEN));
+                return true;
+            }
+            case "fire" -> {   // /firearms fire <player> - one shot from the console (testing)
+                if (!sender.hasPermission("firearms.admin")) return deny(sender);
+                Player t = args.length >= 2 ? Bukkit.getPlayerExact(args[1]) : sender instanceof Player pl ? pl : null;
+                if (t == null) { sender.sendMessage(Component.text("/firearms fire <player>", NamedTextColor.YELLOW)); return true; }
+                plugin.controller().forceFire(t);
+                return true;
+            }
             case "host", "packhost" -> { sender.sendMessage(Component.text(plugin.packHost.status(), NamedTextColor.GOLD)); if (sender instanceof Player pl) { sender.sendMessage(Component.text("URL for you: " + plugin.packHost.urlFor(pl) + "  sha1 " + plugin.packHost.sha1(), NamedTextColor.GRAY)); plugin.packHost.send(pl); sender.sendMessage(Component.text("(pack re-sent to you)", NamedTextColor.GRAY)); } return true; }
             case "version" -> { return usage(sender); }
             case "reload" -> {

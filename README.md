@@ -1,6 +1,6 @@
 # Firearms
 
-Ray-based guns plugin for Paper 26.x (compiled against the 1.21.4 API, boot-tested on 26.2 and 26.3).
+Ray-based guns plugin for Paper 26.3 (compiled against the 1.21.4 API; the first-person rig, viewmodel and aiming verified on a real 26.3 client in 0.30).
 
 - LEFT-click fires; **hold** left on an AUTO gun to spray (client-side barrier "mining stream" hold detection), SEMI = one per click
 - **F** reloads: magazine swap, or one round at a time for pump-action guns (shooting interrupts and keeps what was loaded)

@@ -79,6 +79,7 @@ final class DisplayRig {
         return out;
     }
 
+    private static int countNull(float[][] f) { int n = 0; for (float[] x : f) if (x == null) n++; return n; }
     boolean has(String model) { return models.containsKey(model); }
     boolean showing(Player p) { return active.containsKey(p.getUniqueId()); }
     /** Parts spawned for this player's rig (0 = no rig). */
@@ -108,11 +109,19 @@ final class DisplayRig {
             a.current = mp.rest;
             a.lastSent = new double[mp.partCmd.length][][];
             List<NmsDisplay.Part> real = new ArrayList<>(); for (NmsDisplay.Part pt : a.parts) if (pt != null) real.add(pt);
-            send(p, a, 0, true);
+            boolean staticTest = plugin.getConfig().getBoolean("display.rig.static-test", false);
+            if (staticTest) {
+                // DEBUG: every part parked 2 blocks ahead of the eyes, identity transform, not riding - "do the entities show at all?"
+                var eye = p.getEyeLocation(); var at = eye.clone().add(eye.getDirection().multiply(2));
+                for (NmsDisplay.Part pt : real) { NmsDisplay.moveTo(pt, at.getX(), at.getY(), at.getZ()); NmsDisplay.transform(pt, identity(), 0); }
+                plugin.getLogger().info("Display rig STATIC TEST for " + p.getName() + ": " + real.size() + " part(s) at " + at.getBlockX() + "," + at.getBlockY() + "," + at.getBlockZ());
+            } else send(p, a, 0, true);
             for (NmsDisplay.Part pt : real) NmsDisplay.spawn(p, pt);
-            NmsDisplay.ride(p, real);
+            if (!staticTest) NmsDisplay.ride(p, real);
             a.spawned = true;
+            if (staticTest) a.lastPitch = -1e9;   // never re-sent
             active.put(p.getUniqueId(), a);
+            if (plugin.getConfig().getBoolean("display.rig.debug", false)) plugin.getLogger().info("Display rig for " + p.getName() + ": " + real.size() + " part(s), ids " + NmsDisplay.ids(real).subList(0, Math.min(5, real.size())) + "..., hidden in rest pose: " + countNull(mp.rest));
         } catch (Exception e) {
             plugin.getLogger().warning("Display rig for " + p.getName() + " failed: " + e);
             try { List<NmsDisplay.Part> real = new ArrayList<>(); for (NmsDisplay.Part pt : a.parts) if (pt != null) real.add(pt); NmsDisplay.remove(p, real); } catch (Exception ignored) { }
@@ -153,7 +162,8 @@ final class DisplayRig {
             Player p = plugin.getServer().getPlayer(e.getKey());
             Active a = e.getValue();
             if (p == null || !p.isOnline()) { active.remove(e.getKey()); continue; }
-            if (registry.gunOf(p.getInventory().getItemInMainHand()) != a.gun) { hide(p); continue; }
+            GunType heldNow = registry.gunOf(p.getInventory().getItemInMainHand());
+            if (heldNow == null || !heldNow.id().equals(a.gun.id())) { hide(p); continue; }   // by id: a registry reload makes new GunType objects
             int duration = 1;
             if (a.clip != null) {
                 List<float[][]> frames = a.poses.clips.get(a.clip);
@@ -183,6 +193,7 @@ final class DisplayRig {
     private void send(Player p, Active a, int duration, boolean all) {
         double pitch = p.getLocation().getPitch();
         boolean sneak = p.isSneaking();
+        if (a.lastPitch == -1e9) return;   // debug tests: frozen
         boolean cameraMoved = Math.abs(pitch - a.lastPitch) > 0.5 || sneak != a.lastSneak;
         if (!all && duration == 0 && !cameraMoved) return;
         a.lastPitch = pitch; a.lastSneak = sneak;
@@ -190,7 +201,7 @@ final class DisplayRig {
         // H = the gun's hip pose + this player's /viewmodel offset; A = the fixed aim pose for everyone (guns.yml aim-pose,
         // on top of the aim clip's end pose), with no player offset, so a customised H never moves the shared sight line
         Viewmodels.Setting vm = a.aiming ? new Viewmodels.Setting() : plugin.viewmodels() != null ? plugin.viewmodels().of(p) : new Viewmodels.Setting();
-        double[][] hand = handChain(a.poses, vm, a.aiming ? a.gun.aimPose() : null);
+        double[][] hand = handChain(a.poses, vm, a.aiming, a.gun.aimPose());
         for (int i = 0; i < a.parts.size(); i++) {
             NmsDisplay.Part part = a.parts.get(i);
             if (part == null) continue;
@@ -200,6 +211,9 @@ final class DisplayRig {
             else tf = transformFor(a.poses, i, m, hand, offC);
             if (!all && same(tf, a.lastSent[i])) continue;
             a.lastSent[i] = tf;
+            if (all && i < 6 && plugin.getConfig().getBoolean("display.rig.debug", false))
+                plugin.getLogger().info(String.format("rig part %d (%s, variant %d): %s translation [%.3f %.3f %.3f] scale [%.3f %.3f %.3f] pitch %.1f offC y %.3f z %.3f", i, a.poses.partCmd[i], a.poses.partVariant[i], m == null ? "HIDDEN" : "", tf[0][3], tf[1][3], tf[2][3],
+                    Math.sqrt(tf[0][0]*tf[0][0]+tf[1][0]*tf[1][0]+tf[2][0]*tf[2][0]), Math.sqrt(tf[0][1]*tf[0][1]+tf[1][1]*tf[1][1]+tf[2][1]*tf[2][1]), Math.sqrt(tf[0][2]*tf[0][2]+tf[1][2]*tf[1][2]+tf[2][2]*tf[2][2]), pitch, offC[1][0], offC[2][0]));
             try { NmsDisplay.transform(part, tf, cameraMoved && duration == 0 ? 1 : duration); if (!all || a.spawned) NmsDisplay.update(p, part); }
             catch (Exception e) { plugin.getLogger().warning("Display rig update failed: " + e); }
         }
@@ -208,21 +222,28 @@ final class DisplayRig {
     // ---------------------------------------------------------------- the maths
 
     /** T(hand) T(tr/16) R(rot) S(sc) T(-0.5): the gun's own first-person transform, then vanilla's hand placement. */
-    private double[][] handChain(ModelPoses mp, Viewmodels.Setting vm, org.bukkit.configuration.ConfigurationSection aimPose) {
-        double[] h = list3("display.rig.hand", new double[]{0.56, -0.52, -0.72});
-        double[] extra = list3("display.rig.offset", new double[]{0, 0, 0});
-        // the player's own /viewmodel offset (right, up, forward -> view -z), in sixteenths of a block
-        double[][] t = translate(h[0] + extra[0] + vm.x / 16.0, h[1] + extra[1] + vm.y / 16.0, h[2] + extra[2] - vm.z / 16.0);
-        if (aimPose != null) {
+    private double[][] handChain(ModelPoses mp, Viewmodels.Setting vm, boolean aiming, org.bukkit.configuration.ConfigurationSection aimPose) {
+        // hip: vanilla's hand point (0.56 right, 0.52 down, 0.72 ahead); aim: the gun centred under the eye line (display.rig.aim-hand),
+        // on top of which the model's aim clip (if any) and the gun's aim-pose adjust apply
+        double[] h = aiming ? list3("display.rig.aim-hand", new double[]{0.06, -0.235, -1.1}) : list3("display.rig.hand", new double[]{0.56, -0.52, -0.72});
+        double[] extra = aiming ? new double[]{0, 0, 0} : list3("display.rig.offset", new double[]{0, 0, 0});
+        // Aiming zooms the client's field of view (the aim.speed-multiplier: fov x (mult + 1) / 2), and the rig is a world
+        // entity, so it would be magnified with the world. Everything in the aim placement is pushed out by the inverse, so
+        // the gun keeps its screen size and spot: aim-hand is given in un-zoomed view units.
+        double zoomComp = aiming ? 2.0 / (1.0 + Math.max(0.05, plugin.getConfig().getDouble("aim.speed-multiplier", 0.35))) : 1.0;
+        double[][] t = translate((h[0] + extra[0] + vm.x / 16.0) * zoomComp, (h[1] + extra[1] + vm.y / 16.0) * zoomComp, (h[2] + extra[2] - vm.z / 16.0) * zoomComp);
+        if (aiming && aimPose != null) {
             // the gun's aim-state adjust (guns.yml aim-pose / `/firearms pose <gun> aim ...`): offset in sixteenths of a block
             // (right, up, forward), rotation in degrees and a scale, applied about the hand point in view space
             double[] off = vec3(aimPose, "offset", new double[]{0, 0, 0}), rot = vec3(aimPose, "rotation", new double[]{0, 0, 0});
             double sc0 = aimPose.getDouble("scale", 1.0);
-            double[][] adj = mul(mul(mul(translate(h[0] + off[0] / 16.0, h[1] + off[1] / 16.0, h[2] - off[2] / 16.0), rotXYZ(rot)), scale(sc0, sc0, sc0)), translate(-h[0], -h[1], -h[2]));
+            double[] hz = { h[0] * zoomComp, h[1] * zoomComp, h[2] * zoomComp };
+            double[][] adj = mul(mul(mul(translate(hz[0] + off[0] / 16.0 * zoomComp, hz[1] + off[1] / 16.0 * zoomComp, hz[2] - off[2] / 16.0 * zoomComp), rotXYZ(rot)), scale(sc0, sc0, sc0)), translate(-hz[0], -hz[1], -hz[2]));
             t = mul(adj, t);
         }
         double[][] tr = translate(mp.fpTranslation[0] / 16, mp.fpTranslation[1] / 16, mp.fpTranslation[2] / 16);
-        double[][] r = rotXYZ(mp.fpRotation);
+        // the model's first-person rotation is the hip cant (barrel pointing inward); on the sights the gun runs parallel to the view
+        double[][] r = aiming && plugin.getConfig().getBoolean("display.rig.aim-straight", true) ? identity() : rotXYZ(mp.fpRotation);
         double[][] sc = scale(mp.fpScale[0], mp.fpScale[1], mp.fpScale[2]);
         return mul(mul(mul(mul(t, tr), r), sc), translate(-0.5, -0.5, -0.5));
     }
@@ -243,8 +264,10 @@ final class DisplayRig {
         // gun(blocks) = Pw/16 + (M3/k) r, r = the item model centred at the entity origin
         double[][] g = {{M[0][0]/k, M[0][1]/k, M[0][2]/k, Pw[0]/16}, {M[1][0]/k, M[1][1]/k, M[1][2]/k, Pw[1]/16}, {M[2][0]/k, M[2][1]/k, M[2][2]/k, Pw[2]/16}, {0, 0, 0, 1}};
         double[][] view = mul(hand, g);                     // view space: +X right, +Y up, -Z forward
-        double[][] flip = rotY180();                        // camera/display frame: +X left, +Z forward; the item renderer flips once more
-        double[][] tf = mul(mul(flip, view), flip);
+        // A CENTER-billboarded display's local frame IS view space (+X right, +Y up, +Z toward the camera) - measured on a
+        // real 26.3 client (0.30): a translation of (0.6, -0.2, -1.0) shows up right, slightly low, one block ahead. The item
+        // renderer then turns the item 180 degrees about Y before drawing it, so the item-space geometry gets that flip.
+        double[][] tf = mul(view, rotY180());
         for (int a = 0; a < 3; a++) tf[a][3] -= offC[a][0];
         return tf;
     }

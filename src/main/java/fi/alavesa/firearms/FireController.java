@@ -538,6 +538,18 @@ public final class FireController implements Listener {
 
     // ------------------------------------------------------------------ aiming down the sight
 
+    private final Set<UUID> forcedAim = ConcurrentHashMap.newKeySet();   // /firearms aim <player> on: the sight held without a right-click (testing)
+    /** Testing aid: hold or release the sight for a player from the console. */
+    public void forceAim(Player p, boolean on) {
+        ItemStack item = p.getInventory().getItemInMainHand();
+        GunType gun = registry.gunOf(item);
+        if (on) { if (gun == null) return; forcedAim.add(p.getUniqueId()); aimSeen.put(p.getUniqueId(), plugin.getServer().getCurrentTick()); if (!aiming.contains(p.getUniqueId())) enterAim(p, gun, item); }
+        else { forcedAim.remove(p.getUniqueId()); exitAim(p, gun, item, true); }
+    }
+
+    /** Testing aid: one trigger pull from the console. */
+    public void forceFire(Player p) { ItemStack item = p.getInventory().getItemInMainHand(); GunType gun = registry.gunOf(item); if (gun != null) fire(p, gun, item); }
+
     /** Sneaking counts as aiming too (config aim.sneak-aims), as it always did. */
     public boolean isAiming(Player p) { return aiming.contains(p.getUniqueId()) || (plugin.getConfig().getBoolean("aim.sneak-aims", true) && p.isSneaking()); }
 
@@ -576,7 +588,7 @@ public final class FireController implements Listener {
             // While the trigger is held the client is "mining" the hold barrier and sends NO right-clicks (it does not use
             // items while destroying a block), so the sight used to drop mid-spray: a live trigger stream keeps the aim.
             Integer ls = lastSwingTick.get(id);
-            boolean firing = ls != null && now - ls <= timeout;
+            boolean firing = (ls != null && now - ls <= timeout) || forcedAim.contains(id);
             if (gun == null || seen == null || (now - seen > timeout && !firing)) { exitAim(p, gun, item, true); continue; }
             if (now % 5 == 0 && !animTasks.containsKey(id)) sendAimView(p, gun, item);   // a server inventory update may have overwritten it
         }

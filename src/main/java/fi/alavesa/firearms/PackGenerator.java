@@ -198,7 +198,11 @@ public final class PackGenerator {
         JsonObject pack = new JsonObject();
         JsonObject p = new JsonObject();
         p.addProperty("description", "Firearms (generated)");
-        int min = plugin.getConfig().getInt("pack.min-format", 46), max = plugin.getConfig().getInt("pack.max-format", 999);
+        // 26.3 = resource format 97. A pack declaring a format below 65 without a supported_formats field is REJECTED by the
+        // 26.3 client ("Error reading pack metadata") - the whole pack then fails to apply. So never go below 65 here.
+        int min = plugin.getConfig().getInt("pack.min-format", 97), max = plugin.getConfig().getInt("pack.max-format", 999);
+        if (min < 65) { report.add("pack.min-format " + min + " raised to 97: formats below 65 are rejected by 26.x clients"); min = 97; }
+        if (max < min) max = 999;
         p.addProperty("pack_format", min);
         p.addProperty("min_format", min);
         p.addProperty("max_format", max);

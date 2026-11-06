@@ -1,5 +1,26 @@
 # Viewmodel: why a held item cannot be moved per player, and how Firearms does it
 
+## What was actually wrong (found on a real 26.3 client, 0.30)
+
+Three bugs stacked, so nothing could be seen before 0.30; each alone would have hidden the gun:
+
+1. **The pack never loaded.** The generated `pack.mcmeta` declared format 46; a 26.3 client refuses such a pack
+   outright ("Error reading pack metadata... require a supported_formats field") and applies nothing of it. The
+   client log says so, the server cannot know. Now `min_format` is 97 (never below 65).
+2. **Every rig part was spawned at world 0,0,0.** The AddEntity packet was built with the constructor that takes a
+   BlockPos, and that constructor uses the BlockPos as the position (it is for paintings). Now the explicit one.
+3. **The display frame was mirrored.** A CENTER-billboarded display's local axes are plain view space (+X right,
+   +Y up, +Z toward the camera); the rig assumed +Z forward / +X left, so the gun was placed behind the head.
+   Measured with a test entity: offset (0.6, -0.2, -1.0) shows up right, slightly low, one block ahead.
+
+Verified with screenshots on a real client (0.30 defaults, the TaCZ M4 rifle model):
+
+| hip | aiming (`/firearms aim`) | `/viewmodel 3 1 0` |
+| --- | --- | --- |
+| ![hip](img/rig-hip.png) | ![aim](img/rig-aim.png) | ![viewmodel](img/rig-vm.png) |
+
+Also seen working: the fire clip with the muzzle flash, and the blend H to A and back.
+
 ## The short version
 
 A Minecraft **item in the hand** is placed by the item model's `display.firstperson_righthand` transform, which
@@ -38,9 +59,16 @@ see FIREARMS.md *Aiming on the rig*.
    fail to apply: no guns, no rig, no flash. 0.28 has no shaders at all.
 6. **your offset** - what `/viewmodel` stored for you.
 
+## Testing from the console (no client input needed)
+
+- `/viewmodel <player> <right> <up> <forward> | reset | show` (admins / console) sets another player's offset.
+- `/firearms aim <player> on|off` holds or releases the sight for a player; `/firearms fire <player>` fires one shot.
+- `display.rig.debug: true` logs the first parts' transforms every time a rig is (re)sent; `static-test: true`
+  parks the parts two blocks ahead without riding, to tell "entities do not appear" from "placed wrong".
+
 ## Checklist when "viewmodel does nothing"
 
-- Only one Firearms jar in `plugins/`, console shows `Enabling Firearms v0.28.0` or newer.
+- Only one Firearms jar in `plugins/`, console shows `Enabling Firearms v0.30.0` or newer, and `/firearms pack` was run on it (older packs are rejected by the client).
 - `/firearms rig` lines 1-4 green with a gun in hand.
 - The client accepted the pack: the chat shows the server's pack prompt, and `/firearms host` shows no failure
   for you. A client with the pack declined shows a plain crossbow in third person and nothing in first person.

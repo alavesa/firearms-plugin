@@ -76,28 +76,45 @@ public final class Viewmodels implements org.bukkit.command.CommandExecutor, Tab
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        // console / admin form: /viewmodel <player> <right> <up> <forward> | reset | show
+        if (args.length >= 2 && (!(sender instanceof Player) || sender.hasPermission("firearms.admin"))) {
+            Player other = plugin.getServer().getPlayerExact(args[0]);
+            if (other != null) {
+                String[] rest = java.util.Arrays.copyOfRange(args, 1, args.length);
+                boolean ok = apply(other, rest);
+                if (ok) { Setting now = of(other); sender.sendMessage(Component.text(other.getName() + " viewmodel offset: " + fmt(now.x) + " " + fmt(now.y) + " " + fmt(now.z), NamedTextColor.GREEN)); }
+                else sender.sendMessage(Component.text("/viewmodel <player> <right> <up> <forward> | reset | show", NamedTextColor.YELLOW));
+                return true;
+            }
+        }
         if (!(sender instanceof Player p)) { sender.sendMessage("Players only."); return true; }
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) { help(p); return true; }
-        String sub = args[0].toLowerCase(Locale.ROOT);
-        int i = sub.equals("offset") || sub.equals("set") ? 1 : 0;
-        if (sub.equals("reset")) { settings.remove(p.getUniqueId()); }
-        else if (sub.equals("show") || sub.equals("get")) { }
-        else {
-            if (args.length < i + 3) { help(p); return true; }
-            Setting s = new Setting();
-            try {
-                s.x = clamp(Double.parseDouble(args[i]));
-                s.y = clamp(Double.parseDouble(args[i + 1]));
-                s.z = clamp(Double.parseDouble(args[i + 2]));
-            } catch (NumberFormatException e) { p.sendMessage(Component.text("Three numbers, -5..5: /viewmodel <right> <up> <forward>", NamedTextColor.RED)); return true; }
-            if (s.isDefault()) settings.remove(p.getUniqueId()); else settings.put(p.getUniqueId(), s);
-        }
-        save();
+        if (!apply(p, args)) { help(p); return true; }
         Setting now = of(p);
         p.sendMessage(Component.text("Viewmodel offset: right " + fmt(now.x) + ", up " + fmt(now.y) + ", forward " + fmt(now.z) + (now.isDefault() ? " (stock)" : ""), NamedTextColor.GREEN));
         GunType held = plugin.registry.gunOf(p.getInventory().getItemInMainHand());
         if (held != null && !plugin.registry.displayMode(held.model()))
             p.sendMessage(Component.text("(" + held.id() + " is not on the display rig - its first person is baked into the pack. Guns follow /viewmodel in display mode: config anim.mode: display, then /firearms pack.)", NamedTextColor.GRAY));
+        return true;
+    }
+
+    /** Parse and store an offset command for `p`; false = bad syntax. Refreshes the rig. */
+    private boolean apply(Player p, String[] args) {
+        String sub = args.length == 0 ? "show" : args[0].toLowerCase(Locale.ROOT);
+        int i = sub.equals("offset") || sub.equals("set") ? 1 : 0;
+        if (sub.equals("reset")) { settings.remove(p.getUniqueId()); }
+        else if (sub.equals("show") || sub.equals("get")) { }
+        else {
+            if (args.length < i + 3) return false;
+            Setting s = new Setting();
+            try {
+                s.x = clamp(Double.parseDouble(args[i]));
+                s.y = clamp(Double.parseDouble(args[i + 1]));
+                s.z = clamp(Double.parseDouble(args[i + 2]));
+            } catch (NumberFormatException e) { return false; }
+            if (s.isDefault()) settings.remove(p.getUniqueId()); else settings.put(p.getUniqueId(), s);
+        }
+        save();
         plugin.rig().refresh(p);
         return true;
     }
