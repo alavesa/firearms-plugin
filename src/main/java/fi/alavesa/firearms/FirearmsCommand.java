@@ -68,6 +68,15 @@ public final class FirearmsCommand implements CommandExecutor, TabCompleter {
                 if (!sender.hasPermission("firearms.admin")) return deny(sender);
                 return pose(sender, args);
             }
+            case "aimpose", "aimmodel" -> {   // /firearms aimpose <gun> <right> <up> <forward> - the shared aim placement, like /viewmodel but for everyone
+                if (!sender.hasPermission("firearms.admin")) return deny(sender);
+                if (args.length < 2) { sender.sendMessage(Component.text("/firearms aimpose <gun> <right> <up> <forward> | reset | show   (sixteenths of a block, -80..80; everyone's aim state of that gun, applied live)", NamedTextColor.YELLOW)); return true; }
+                String[] a2;
+                if (args.length >= 5) a2 = new String[]{"pose", args[1], "aim", "offset", args[2], args[3], args[4]};
+                else if (args.length >= 3 && args[2].equalsIgnoreCase("reset")) a2 = new String[]{"pose", args[1], "aim", "reset"};
+                else a2 = new String[]{"pose", args[1], "aim"};
+                return pose(sender, a2);
+            }
             case "models" -> {
                 File dir = new File(plugin.getDataFolder(), "models");
                 sender.sendMessage(Component.text("Model files expected in " + dir.getPath() + ":", NamedTextColor.GOLD));

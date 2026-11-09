@@ -148,7 +148,13 @@ final class DisplayRig {
     }
 
     /** Re-send every part with the current settings (after /viewmodel). */
-    void refresh(Player p) { Active a = active.get(p.getUniqueId()); if (a != null) send(p, a, 2, true); }
+    void refresh(Player p) {
+        Active a = active.get(p.getUniqueId());
+        if (a == null) return;
+        GunType fresh = registry.gun(a.gun.id());   // a reload (aim-pose edit) made new GunType objects: read the new values
+        if (fresh != null) a.gun = fresh;
+        send(p, a, 2, true);
+    }
 
     void stopClip(Player p) { Active a = active.get(p.getUniqueId()); if (a != null) { a.clip = null; a.then = null; } }
 
@@ -264,6 +270,11 @@ final class DisplayRig {
         // gun(blocks) = Pw/16 + (M3/k) r, r = the item model centred at the entity origin
         double[][] g = {{M[0][0]/k, M[0][1]/k, M[0][2]/k, Pw[0]/16}, {M[1][0]/k, M[1][1]/k, M[1][2]/k, Pw[1]/16}, {M[2][0]/k, M[2][1]/k, M[2][2]/k, Pw[2]/16}, {0, 0, 0, 1}};
         double[][] view = mul(hand, g);                     // view space: +X right, +Y up, -Z forward
+        // The whole rig is shrunk toward the eye (display.rig.scale): a uniform scale about the camera leaves the picture on
+        // screen exactly the same (perspective), but the model then lives inside the player's own space instead of
+        // reaching 0.7 blocks into the wall in front - the "gun through walls" of 0.30.
+        double rs = Math.max(0.1, Math.min(1.0, plugin.getConfig().getDouble("display.rig.scale", 0.4)));
+        if (rs != 1.0) view = mul(scale(rs, rs, rs), view);
         // A CENTER-billboarded display's local frame IS view space (+X right, +Y up, +Z toward the camera) - measured on a
         // real 26.3 client (0.30): a translation of (0.6, -0.2, -1.0) shows up right, slightly low, one block ahead. The item
         // renderer then turns the item 180 degrees about Y before drawing it, so the item-space geometry gets that flip.

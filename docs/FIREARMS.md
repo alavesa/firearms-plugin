@@ -71,6 +71,11 @@ rig keeps its screen size. Set A in game, live: `/firearms pose <gun> aim offset
 guns.yml `aim-pose` and applied to every rig at once, no rebuild. Animations work the same way: every clip is a pose
 per tick sent to the rig and blended by the client, no frame models in the pack (ANIMATIONS.md *Display mode*).
 
+Right-click during an inspect stops the inspect and brings the sight up. A reload started while aiming keeps
+the aim (the clip plays, the gun snaps back onto the sight); a reload started from the hip cannot be aimed through
+until it is done. The whole rig is drawn shrunk toward the eye (`display.rig.scale`, 0.4): same picture, but the
+model stays within the player's own space instead of reaching into the wall in front (0.31).
+
 ## Flashbang (0.27, no shaders since 0.28)
 
 `grenades.yml kind: flash`: everyone within `radius` with a line of sight gets a white screen, strongest near and
@@ -120,6 +125,7 @@ Try rhythm on the experimental gun; if it feels right it can be set on any gun w
 | `/firearms host` | pack delivery status |
 | `/firearms rig` | why `/viewmodel` does or does not move the held gun: six checks, see docs/VIEWMODEL.md |
 | `/firearms pose <gun> aim offset|rotate|scale|reset ...` | the rig's shared aim state A, applied live |
+| `/firearms aimpose <gun> <right> <up> <forward>` | the same, shaped like `/viewmodel`: everyone's aim placement of that gun, sixteenths of a block, live |
 | `/firearms aim <player> on|off`, `/firearms fire <player>` | testing from the console: hold the sight, fire one shot |
 | `/viewmodel <player> ...` | admins: set another player's offset |
 | `/firearms reload` | re-read the configs |

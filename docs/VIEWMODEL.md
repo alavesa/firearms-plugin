@@ -19,7 +19,10 @@ Verified with screenshots on a real client (0.30 defaults, the TaCZ M4 rifle mod
 | --- | --- | --- |
 | ![hip](img/rig-hip.png) | ![aim](img/rig-aim.png) | ![viewmodel](img/rig-vm.png) |
 
-Also seen working: the fire clip with the muzzle flash, and the blend H to A and back.
+Also seen working: the fire clip with the muzzle flash, the blend H to A and back, and (0.31) the gun against a
+stone wall half a block away without reaching into it, thanks to `display.rig.scale`:
+
+![wall](img/rig-wall.png)
 
 ## The short version
 

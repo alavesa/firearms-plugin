@@ -314,6 +314,9 @@ display:
     # everyone; the default puts an M4's iron sights on the crosshair with the whole gun visible below the eye line. Nearer
     # (e.g. -0.5) = the view through the rear aperture with the stock clipped by the camera. Per gun on top: guns.yml aim-pose.
     aim-hand: [0.06, -0.235, -1.1]
+    # The rig shrunk toward the eye by this factor (hip and aim, /viewmodel offsets included): the picture on screen stays
+    # the same, but the model stays within the player's own space instead of reaching into walls. 1 = the real size.
+    scale: 0.4
     aim-straight: true           # aiming drops the model's hip cant so the barrel runs parallel to the view
     debug: false                 # log the first parts' transforms when a rig is (re)sent
     static-test: false           # diagnostic: park the parts 2 blocks ahead, not riding - "do the entities show at all?"

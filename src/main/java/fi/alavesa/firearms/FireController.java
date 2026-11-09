@@ -51,6 +51,7 @@ public final class FireController implements Listener {
     private final Set<UUID> reloadingMag = ConcurrentHashMap.newKeySet();
     private final Set<UUID> reloadingPump = ConcurrentHashMap.newKeySet();
     private final Map<UUID, List<BukkitTask>> animTasks = new ConcurrentHashMap<>();
+    private final Map<UUID, String> currentClip = new ConcurrentHashMap<>();   // the clip playing for a player (fire, reload, inspect...)
     private final Map<UUID, Long> lastShotTick = new ConcurrentHashMap<>();
     private final Map<UUID, Integer> drawUntil = new ConcurrentHashMap<>();
     private final Map<UUID, Integer> aimSeen = new ConcurrentHashMap<>();     // last server tick a right-click arrived (the client repeats it every ~4 ticks while held)
@@ -105,6 +106,9 @@ public final class FireController implements Listener {
                 // HOLD to aim: the client re-sends the right-click every ~4 ticks while the button is down (the
                 // charged crossbow never starts a continuous use), so "still held" = a click within the last few ticks
                 aimSeen.put(p.getUniqueId(), plugin.getServer().getCurrentTick());
+                // right-click during an inspect: the inspect stops and the gun goes onto the sight
+                String clip = currentClip.get(p.getUniqueId());
+                if (clip != null && clip.startsWith("inspect") && !aiming.contains(p.getUniqueId())) cancelClip(p);
                 if (!aiming.contains(p.getUniqueId())) enterAim(p, gun, item);
             }
             return;
@@ -600,6 +604,9 @@ public final class FireController implements Listener {
         UUID id = p.getUniqueId();
         Integer du = drawUntil.get(id);
         if (du != null && plugin.getServer().getCurrentTick() < du) return;   // still drawing the gun
+        // a reload started from the hip cannot be aimed through: the sight comes up again when it is done (a reload
+        // started WHILE aiming keeps the aim - see startMagReload / startPumpReload, which never touch `aiming`)
+        if (reloadingMag.contains(id) || reloadingPump.contains(id)) return;
         aiming.add(id);
         double mult = plugin.getConfig().getDouble("aim.speed-multiplier", 0.35);
         var attr = p.getAttribute(org.bukkit.attribute.Attribute.MOVEMENT_SPEED);
@@ -653,6 +660,7 @@ public final class FireController implements Listener {
         double stretch = totalTicks > 0 ? (double) totalTicks / length : 1.0;
         final int holdUntil = Math.max(totalTicks, (int) Math.round(length * stretch));
         cancelClip(p);
+        currentClip.put(p.getUniqueId(), clip);
         int slot = p.getInventory().getHeldItemSlot();
         String uid = uid(item);
         List<BukkitTask> tasks = new ArrayList<>();
@@ -675,7 +683,7 @@ public final class FireController implements Listener {
             }, Math.round(sndAt * stretch)));
         }
         tasks.add(plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
-            animTasks.remove(p.getUniqueId());
+            animTasks.remove(p.getUniqueId()); currentClip.remove(p.getUniqueId());
             ItemStack cur = p.getInventory().getItem(slot);
             if (!uid.equals(uid(cur))) return;
             if (then != null) { then.run(); return; }
@@ -692,6 +700,7 @@ public final class FireController implements Listener {
         double stretch = totalTicks > 0 ? (double) totalTicks / length : 1.0;
         final int holdUntil = Math.max(totalTicks, (int) Math.round(length * stretch));
         cancelClip(p);
+        currentClip.put(p.getUniqueId(), clip);
         if (!plugin.rig().showing(p)) plugin.rig().show(p, gun, item);
         int slot = p.getInventory().getHeldItemSlot();
         String uid = uid(item);
@@ -707,7 +716,7 @@ public final class FireController implements Listener {
             }, Math.round(sndAt * stretch)));
         }
         tasks.add(plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
-            animTasks.remove(p.getUniqueId());
+            animTasks.remove(p.getUniqueId()); currentClip.remove(p.getUniqueId());
             if (then != null) then.run();
         }, holdUntil));
         animTasks.put(p.getUniqueId(), tasks);
@@ -740,6 +749,7 @@ public final class FireController implements Listener {
 
     private void cancelClip(Player p) {
         plugin.rig().stopClip(p);
+        currentClip.remove(p.getUniqueId());
         List<BukkitTask> t = animTasks.remove(p.getUniqueId());
         if (t == null) return;
         t.forEach(BukkitTask::cancel);

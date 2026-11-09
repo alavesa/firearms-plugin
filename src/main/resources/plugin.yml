@@ -13,6 +13,7 @@ commands:
       /firearms give <gun|mag|ammo id> [amount] [player]
       /firearms pack
       /firearms rig
+      /firearms aimpose <gun> <right> <up> <forward> | reset
       /firearms aim <player> on|off
       /firearms fire <player>
       /firearms reload
