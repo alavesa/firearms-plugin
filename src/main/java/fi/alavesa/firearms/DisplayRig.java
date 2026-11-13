@@ -40,6 +40,7 @@ final class DisplayRig {
         boolean aiming, spawned;
         boolean shownAiming;                               // the state the client was last sent (H = the player's hip pose, A = the fixed aim pose)
         double lastPitch = 1e9; boolean lastSneak;
+        double scale = -1;                                 // the rig scale last sent (display.rig.scale .. scale-open, by the wall check)
     }
 
     private final FirearmsPlugin plugin;
@@ -190,6 +191,17 @@ final class DisplayRig {
             // where it is to the other state over aim-ticks, whatever the player's own /viewmodel hip offset is
             boolean switchAim = a.aiming != a.shownAiming;
             if (switchAim) { a.shownAiming = a.aiming; duration = Math.max(duration, aimTicks()); }
+            // Rig scale: only as small as the wall in front needs. Any scale gives the same picture from a still camera, so
+            // the change is invisible - but the smaller the rig, the more the camera's own motion (view bobbing, the pitch
+            // correction arriving a tick late) moves it on screen: at 0.4 everywhere (0.31) walking and looking up/down
+            // swung the gun 2.5x as much as at full size. Shrinks within a tick, grows back over scale-ticks.
+            double want = wantedScale(p, a.aiming);
+            if (a.scale < 0 || Math.abs(want - a.scale) >= 0.05 || (want != a.scale && (want == scaleMin() || want == scaleOpen()))) {
+                boolean shrink = a.scale >= 0 && want < a.scale;
+                a.scale = want;
+                if (!switchAim) duration = Math.max(duration, shrink ? 1 : Math.max(1, plugin.getConfig().getInt("display.rig.scale-ticks", 3)));
+                switchAim = true;   // every part
+            }
             send(p, a, duration, switchAim);
         }
     }
@@ -214,13 +226,13 @@ final class DisplayRig {
             float[] m = a.current[i];
             double[][] tf;
             if (m == null) tf = hiddenTransform();
-            else tf = transformFor(a.poses, i, m, hand, offC);
+            else tf = transformFor(a.poses, i, m, hand, offC, a.scale < 0 ? scaleMin() : a.scale);
             if (!all && same(tf, a.lastSent[i])) continue;
             a.lastSent[i] = tf;
             if (all && i < 6 && plugin.getConfig().getBoolean("display.rig.debug", false))
                 plugin.getLogger().info(String.format("rig part %d (%s, variant %d): %s translation [%.3f %.3f %.3f] scale [%.3f %.3f %.3f] pitch %.1f offC y %.3f z %.3f", i, a.poses.partCmd[i], a.poses.partVariant[i], m == null ? "HIDDEN" : "", tf[0][3], tf[1][3], tf[2][3],
                     Math.sqrt(tf[0][0]*tf[0][0]+tf[1][0]*tf[1][0]+tf[2][0]*tf[2][0]), Math.sqrt(tf[0][1]*tf[0][1]+tf[1][1]*tf[1][1]+tf[2][1]*tf[2][1]), Math.sqrt(tf[0][2]*tf[0][2]+tf[1][2]*tf[1][2]+tf[2][2]*tf[2][2]), pitch, offC[1][0], offC[2][0]));
-            try { NmsDisplay.transform(part, tf, cameraMoved && duration == 0 ? 1 : duration); if (!all || a.spawned) NmsDisplay.update(p, part); }
+            try { NmsDisplay.transform(part, tf, cameraMoved && duration == 0 ? pitchBlend() : duration); if (!all || a.spawned) NmsDisplay.update(p, part); }
             catch (Exception e) { plugin.getLogger().warning("Display rig update failed: " + e); }
         }
     }
@@ -253,6 +265,32 @@ final class DisplayRig {
         double[][] sc = scale(mp.fpScale[0], mp.fpScale[1], mp.fpScale[2]);
         return mul(mul(mul(mul(t, tr), r), sc), translate(-0.5, -0.5, -0.5));
     }
+    private double scaleMin() { return Math.max(0.1, Math.min(1.0, plugin.getConfig().getDouble("display.rig.scale", 0.4))); }
+    private double scaleOpen() { return Math.max(scaleMin(), Math.min(1.0, plugin.getConfig().getDouble("display.rig.scale-open", 1.0))); }
+    /** Ticks the client blends a pitch-only correction over (0 = at once: the least lag, the most stepping). */
+    private int pitchBlend() { return Math.max(0, plugin.getConfig().getInt("display.rig.pitch-blend-ticks", 0)); }
+
+    /** The largest rig scale that keeps the gun out of the block in front: rays along the view and toward the hand,
+     *  each compared with how far the full-size gun reaches that way (display.rig.reach-hip / reach-aim). */
+    private double wantedScale(Player p, boolean aiming) {
+        double lo = scaleMin(), hi = scaleOpen();
+        if (hi <= lo || !plugin.getConfig().getBoolean("display.rig.wall-check", true)) return lo;
+        double reach = aiming ? plugin.getConfig().getDouble("display.rig.reach-aim", 1.9) : plugin.getConfig().getDouble("display.rig.reach-hip", 1.3);
+        org.bukkit.Location eye = p.getEyeLocation();
+        org.bukkit.util.Vector f = eye.getDirection();
+        double yaw = Math.toRadians(eye.getYaw());
+        org.bukkit.util.Vector right = new org.bukkit.util.Vector(-Math.cos(yaw), 0, -Math.sin(yaw));
+        org.bukkit.util.Vector up = right.clone().crossProduct(f);
+        double[] h = list3("display.rig.hand", new double[]{0.56, -0.52, -0.72});
+        org.bukkit.util.Vector toHand = right.clone().multiply(h[0]).add(up.multiply(h[1])).add(f.clone().multiply(-h[2])).normalize();
+        double rs = hi;
+        for (org.bukkit.util.Vector dir : aiming ? new org.bukkit.util.Vector[]{f} : new org.bukkit.util.Vector[]{f, toHand}) {
+            var hit = p.getWorld().rayTraceBlocks(eye, dir, reach * hi, org.bukkit.FluidCollisionMode.NEVER, true);
+            if (hit == null) continue;
+            rs = Math.min(rs, (hit.getHitPosition().distance(eye.toVector()) - 0.05) / reach);
+        }
+        return Math.max(lo, Math.min(hi, rs));
+    }
     private int aimTicks() { return Math.max(1, plugin.getConfig().getInt("display.rig.aim-ticks", 4)); }
     private static double[] vec3(org.bukkit.configuration.ConfigurationSection c, String key, double[] def) {
         List<Double> l = c.getDoubleList(key);
@@ -262,7 +300,7 @@ final class DisplayRig {
     void refreshAll() { for (Player p : plugin.getServer().getOnlinePlayers()) refresh(p); }
 
     /** The entity transformation that puts part i where the item renderer would draw it, in the display's own frame. */
-    private double[][] transformFor(ModelPoses mp, int i, float[] m, double[][] hand, double[][] offC) {
+    private double[][] transformFor(ModelPoses mp, int i, float[] m, double[][] hand, double[][] offC, double rs) {
         double[][] M = {{m[0], m[1], m[2], m[3]}, {m[4], m[5], m[6], m[7]}, {m[8], m[9], m[10], m[11]}, {0, 0, 0, 1}};
         double[] pv = mp.partPivot[i];
         double[] Pw = { M[0][0]*pv[0]+M[0][1]*pv[1]+M[0][2]*pv[2]+M[0][3], M[1][0]*pv[0]+M[1][1]*pv[1]+M[1][2]*pv[2]+M[1][3], M[2][0]*pv[0]+M[2][1]*pv[1]+M[2][2]*pv[2]+M[2][3] };
@@ -273,7 +311,6 @@ final class DisplayRig {
         // The whole rig is shrunk toward the eye (display.rig.scale): a uniform scale about the camera leaves the picture on
         // screen exactly the same (perspective), but the model then lives inside the player's own space instead of
         // reaching 0.7 blocks into the wall in front - the "gun through walls" of 0.30.
-        double rs = Math.max(0.1, Math.min(1.0, plugin.getConfig().getDouble("display.rig.scale", 0.4)));
         if (rs != 1.0) view = mul(scale(rs, rs, rs), view);
         // A CENTER-billboarded display's local frame IS view space (+X right, +Y up, +Z toward the camera) - measured on a
         // real 26.3 client (0.30): a translation of (0.6, -0.2, -1.0) shows up right, slightly low, one block ahead. The item

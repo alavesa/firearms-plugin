@@ -314,9 +314,18 @@ display:
     # everyone; the default puts an M4's iron sights on the crosshair with the whole gun visible below the eye line. Nearer
     # (e.g. -0.5) = the view through the rear aperture with the stock clipped by the camera. Per gun on top: guns.yml aim-pose.
     aim-hand: [0.06, -0.235, -1.1]
-    # The rig shrunk toward the eye by this factor (hip and aim, /viewmodel offsets included): the picture on screen stays
-    # the same, but the model stays within the player's own space instead of reaching into walls. 1 = the real size.
+    # The rig shrunk toward the eye (hip and aim, /viewmodel offsets included): the picture on screen stays the same, but
+    # the model stays within the player's own space instead of reaching into walls. 1 = the real size. A small rig sways
+    # more with the camera (view bobbing while walking, looking up/down), so since 0.32 it only shrinks when a block is in
+    # front: two short rays per tick pick a scale between `scale` (against a wall) and `scale-open` (nothing in reach).
     scale: 0.4
+    scale-open: 1.0
+    wall-check: true             # false = always `scale` (the 0.31 behaviour)
+    reach-hip: 1.3               # how far ahead the full-size gun reaches at the hip / aiming (blocks); raise if barrels
+    reach-aim: 1.9               #   still poke into walls, lower if the rig shrinks with the wall still well away
+    scale-ticks: 3               # ticks the rig takes to grow back after the wall (shrinking takes one)
+    pitch-blend-ticks: 0         # the rig rides 0.18 above the eyes, so looking up/down needs a server correction; 0 = shown
+                                 #   at once (least lag, may step at 20 Hz), 1 = blended over a tick (0.31: smoother, laggier)
     aim-straight: true           # aiming drops the model's hip cant so the barrel runs parallel to the view
     debug: false                 # log the first parts' transforms when a rig is (re)sent
     static-test: false           # diagnostic: park the parts 2 blocks ahead, not riding - "do the entities show at all?"
