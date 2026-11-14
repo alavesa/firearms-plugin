@@ -33,6 +33,8 @@ public final class FirearmsPlugin extends JavaPlugin {
     public Viewmodels viewmodels() { return viewmodels; }
     public Flash flash() { return flash; }
     public DisplayRig rig() { return rig; }
+    /** Guns, mags and the pack's models: Registry#modelItem("vfx/blood_splatter") gives an item showing any pack model. */
+    public Registry registry() { return registry; }
     public FireController controller() { return controller; }
     public HitAnimations hitAnimations() { return hitAnimations; }
     public PackHost packHost() { return packHost; }

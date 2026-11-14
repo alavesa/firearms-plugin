@@ -36,6 +36,13 @@ import java.util.concurrent.ConcurrentHashMap;
  * entity under the crosshair gets the box just in front of it (the client picks entities over blocks);
  * never within ~1.2 blocks of the player's own hitbox. Cells linger a few ticks, then the real block is
  * re-sent. Also keeps the per-holder attributes: block-reach bonus, weight (walk speed) and the fatigue.
+ * <p>
+ * Why the stream used to die mid-magazine (0.33): the client stops swinging the moment its crosshair is on air or an
+ * entity, and a cell it lost was only sent again every 2 seconds. It loses cells when the server answers a mining start
+ * with the REAL block (Paper does inside spawn protection, and whenever another plugin cancels the left click), and
+ * the server's picture of the crosshair is a ping behind the client's. So: cells are re-sent every hold.refresh-ticks,
+ * the lead and the linger grow with the player's ping, a fast turn is covered along the whole arc it sweeps, and the
+ * box in front of a target is moved further in front by how far the target can close in during the ping.
  */
 public final class HoldDetector {
 
@@ -69,11 +76,15 @@ public final class HoldDetector {
         tick++;
         if (tick % 10 == 0) for (Player p : plugin.getServer().getOnlinePlayers()) bounceOffhandGun(p, registry);   // safety net for every path
         double maxDist = plugin.getConfig().getDouble("hold.distance", 7.0);
-        double lead = plugin.getConfig().getDouble("hold.lead", 3.0);
-        int linger = plugin.getConfig().getInt("hold.linger-ticks", 3);
+        double baseLead = plugin.getConfig().getDouble("hold.lead", 3.0);
+        int baseLinger = plugin.getConfig().getInt("hold.linger-ticks", 3);
+        int refresh = Math.max(1, plugin.getConfig().getInt("hold.refresh-ticks", 2));
         BlockData fake = Material.BARRIER.createBlockData();
         for (Player p : plugin.getServer().getOnlinePlayers()) {
             UUID id = p.getUniqueId();
+            int pingTicks = Math.min(10, (int) Math.ceil(Math.max(0, p.getPing()) / 50.0));   // the client is this far ahead of us
+            double lead = baseLead > 0 ? baseLead + pingTicks : 0;
+            int linger = baseLinger + pingTicks;
             ItemStack held = p.getInventory().getItemInMainHand();
             GunType gun = registry.gunOf(held);
             boolean auto = gun != null && registry.isAuto(held, gun) && !gun.rhythm();   // rhythm guns: no barrier, the tap cadence decides
@@ -82,10 +93,19 @@ public final class HoldDetector {
             if (auto && maxDist > 0 && !p.isDead() && p.isValid()) {
                 Vector dir = p.getEyeLocation().getDirection();
                 Vector prev = lastDir.put(id, dir.clone());
-                addCluster(want, p, dir, maxDist);
+                addCluster(want, p, dir, maxDist, pingTicks);
                 if (prev != null && lead > 0) {
+                    // where the crosshair will be `lead` ticks from now at this turn rate, and every ~2 blocks of arc between
+                    // (the old single cluster at the end left a gap the crosshair fell through on a fast flick)
                     Vector pred = dir.clone().add(dir.clone().subtract(prev).multiply(lead));
-                    if (pred.lengthSquared() > 1e-6 && pred.clone().normalize().dot(dir) < 0.999) addCluster(want, p, pred, maxDist);
+                    if (pred.lengthSquared() > 1e-6 && pred.normalize().dot(dir) < 0.999) {
+                        double arc = Math.acos(Math.max(-1, Math.min(1, pred.dot(dir)))) * maxDist;
+                        int steps = Math.min(6, Math.max(1, (int) Math.ceil(arc / 2.0)));
+                        for (int k = 1; k <= steps; k++) {
+                            double t = (double) k / steps;
+                            addCluster(want, p, dir.clone().multiply(1 - t).add(pred.clone().multiply(t)), maxDist, pingTicks);
+                        }
+                    }
                 }
             } else {
                 lastDir.remove(id);
@@ -95,15 +115,21 @@ public final class HoldDetector {
                 mine = new HashMap<>();
                 cells.put(id, mine);
             }
+            // re-sent every `refresh` ticks, not only when new: a cell the server overwrote with the real block (spawn
+            // protection, a protection plugin cancelling the click) is back before the client misses more than a shot
+            boolean refreshNow = tick % refresh == 0;
             Map<Location, BlockData> send = new HashMap<>();
             for (Location c : want) {
-                if (!mine.containsKey(c) || tick % 40 == 0) send.put(c, fake);
+                if (!mine.containsKey(c) || refreshNow) send.put(c, fake);
                 mine.put(c, tick);
             }
+            BoundingBox guard = p.getBoundingBox().expand(1.0, 0.6, 1.0);
             Map<Location, BlockData> restore = new HashMap<>();
             for (var it = mine.entrySet().iterator(); it.hasNext(); ) {
                 var en = it.next();
-                if (tick - en.getValue() > linger) {
+                // a lingering cell the player walked up to goes at once: a client-side solid block at the body is a wall
+                // (or forces the crawl pose)
+                if (tick - en.getValue() > linger || (en.getValue() != tick && guard.overlaps(BoundingBox.of(en.getKey().getBlock())))) {
                     Location c = en.getKey();
                     if (c.getWorld() != null && c.isChunkLoaded()) restore.put(c, c.getBlock().getBlockData());
                     it.remove();
@@ -115,8 +141,8 @@ public final class HoldDetector {
         }
     }
 
-    private void addCluster(Set<Location> out, Player p, Vector dir, double maxDist) {
-        Location center = spot(p, dir, maxDist);
+    private void addCluster(Set<Location> out, Player p, Vector dir, double maxDist, int pingTicks) {
+        Location center = spot(p, dir, maxDist, pingTicks);
         if (center == null) return;
         BoundingBox guard = p.getBoundingBox().expand(1.0, 0.6, 1.0);
         for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) for (int dz = -1; dz <= 1; dz++) {
@@ -128,7 +154,7 @@ public final class HoldDetector {
     }
 
     /** Where the barrier goes for this look direction, or null for "none" (a real block is there to mine). */
-    private Location spot(Player p, Vector dir, double maxDist) {
+    private Location spot(Player p, Vector dir, double maxDist, int pingTicks) {
         Location eye = p.getEyeLocation();
         Vector eyeV = eye.toVector();
         dir = dir.clone().normalize();
@@ -153,7 +179,10 @@ public final class HoldDetector {
             && !(e instanceof Player pl && pl.getGameMode() == org.bukkit.GameMode.SPECTATOR));
         if (entHit != null && entHit.getHitEntity() != null) {
             double ed = entHit.getHitPosition().distance(eyeV);
-            if (ed < limit) { limit = ed - 0.6; need = true; }
+            // in front of the target by its own reach during our ping: on the client it is already that much nearer, and an
+            // entity nearer than the box wins the crosshair (= no swings at the one you are shooting at)
+            double approach = Math.min(1.5, plugin.getConfig().getDouble("hold.entity-lead", 0.3) * (pingTicks + 1));
+            if (ed < limit) { limit = Math.max(Math.min(ed - 0.6, 1.2), ed - 0.6 - approach); need = true; }
         }
         if (!need || limit < 1.2) return null;
         return eye.clone().add(dir.clone().multiply(limit)).getBlock().getLocation();

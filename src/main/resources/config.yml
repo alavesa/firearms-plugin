@@ -26,7 +26,11 @@ hold:
   distance: 7.0          # 0 = off (tap-fire only)
   reach-bonus: 6.0       # extra block reach while an AUTO gun is held so the barrier is reachable
   lead: 3.0              # fast camera turns: also show the cluster where the crosshair is heading
-  linger-ticks: 3        # keep cells this long after the crosshair leaves them
+  linger-ticks: 3        # keep cells this long after the crosshair leaves them (+1 per 50 ms of the player's ping;
+                         #   lead too: the client's crosshair is a ping ahead of what the server sees)
+  refresh-ticks: 2       # re-send the cells this often - repairs a cell the server overwrote with the real block (spawn
+                         #   protection, a protection plugin cancelling the click), which used to stop full auto for 2 s
+  entity-lead: 0.3       # the box in front of a target moves this much further in front per tick of ping (approaching targets)
   min-distance: 3.0      # a BLOCK never makes the barrier appear nearer than this (grass fields); entities may (1.2)
   mining-fatigue: true   # hidden Mining Fatigue III while any gun is held (no cracks, no breaking)
   no-dip: true           # huge attack_speed while a gun is held, so the gun never dips below the screen after a click
@@ -372,6 +376,10 @@ pack:
   drop-zero-uv-faces: true      # faces the modeller hid with a zero-area UV are not written (exact)
   cull-hidden-faces: true       # faces of a box buried inside another box of the same part are not written (exact)
   client-quads-warn: 1500000    # /firearms pack warns above this many baked quads
+  # Every .bbmodel / Blockbench "Java item" .json in a SUBFOLDER of models/ (vfx/, attachments/, props/...; not players/)
+  # goes into the pack under its path: models/vfx/blood_splatter.bbmodel = custom_model_data "vfx/blood_splatter".
+  # Every .ogg anywhere in models/ is a sound: models/sounds/reload/mag_in.ogg = firearms:reload.mag_in.
+  standalone-models: true
   # Getting the pack to players automatically (on join and right after /firearms pack, added on top of the server's
   # other packs). mode:
   #   auto     - (default) same-port; upload if the Minecraft port cannot be hooked. Nothing to configure.

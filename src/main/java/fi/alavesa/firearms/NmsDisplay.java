@@ -144,11 +144,34 @@ final class NmsDisplay {
 
     /** Send only what changed since the last send. */
     static void update(Player viewer, Part p) throws Exception {
+        Object pk = updatePacket(p);
+        if (pk != null) NmsRecoil.send(NmsRecoil.connection(NmsRecoil.getHandle(viewer)), pk);
+    }
+
+    /** The metadata packet for what changed since the last send, or null if nothing did. */
+    static Object updatePacket(Part p) throws Exception {
         Object data = getEntityData.invoke(p.entity);
         List<?> values = (List<?>) packDirty.invoke(data);
-        if (values == null || values.isEmpty()) return;
-        NmsRecoil.send(NmsRecoil.connection(NmsRecoil.getHandle(viewer)), setDataCtor.newInstance(p.id, values));
+        if (values == null || values.isEmpty()) return null;
+        return setDataCtor.newInstance(p.id, values);
     }
+
+    private static Constructor<?> bundleCtor;
+    private static boolean bundleTried;
+
+    /** Send packets as ONE ClientboundBundlePacket, so the client handles them together (one at a time if the server has none). */
+    static void sendAll(Player viewer, List<Object> packets) throws Exception {
+        if (packets.isEmpty()) return;
+        Object conn = NmsRecoil.connection(NmsRecoil.getHandle(viewer));
+        if (!bundleTried) {
+            bundleTried = true;
+            try { bundleCtor = Class.forName("net.minecraft.network.protocol.game.ClientboundBundlePacket").getConstructor(Iterable.class); }
+            catch (Throwable ignored) { }
+        }
+        if (packets.size() > 1 && bundleCtor != null) { NmsRecoil.send(conn, bundleCtor.newInstance(packets)); return; }
+        for (Object pk : packets) NmsRecoil.send(conn, pk);
+    }
+    static boolean bundles() { return bundleCtor != null; }
 
     /** Make the parts ride the viewer (client-side), so they follow the camera position every frame. */
     static void ride(Player viewer, List<Part> parts) throws Exception {

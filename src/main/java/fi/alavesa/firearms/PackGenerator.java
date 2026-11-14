@@ -130,6 +130,7 @@ public final class PackGenerator {
         Set<String> casingModels = new LinkedHashSet<>();
         for (GunType g : registry.guns()) { String c = registry.casingModel(g); if (c != null) casingModels.add(c); }
         for (String c : casingModels) model(dir, c, "casing", done);
+        if (plugin.getConfig().getBoolean("pack.standalone-models", true)) standaloneModels(dir, done);
         long tModels = System.currentTimeMillis() - t0;
         currentName = null;   // everything below is shared (items file, textures, sounds) - not one model's size
         files.put("assets/" + NS + "/textures/item/arm_pixel.png", whitePng());
@@ -138,15 +139,22 @@ public final class PackGenerator {
             for (GunType g : registry.guns()) icon(dir, g.model(), g.name(), g.id());
             for (GrenadeType gt : registry.grenades()) icon(dir, gt.model(), gt.name(), gt.id());
         }
-        File soundsDir = new File(dir, "sounds");
-        File[] oggs = soundsDir.listFiles((d, n) -> n.toLowerCase(Locale.ROOT).endsWith(".ogg"));
-        if (oggs != null) for (File ogg : oggs) {
-            String sname = ogg.getName().substring(0, ogg.getName().length() - 4).toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_]", "_");
-            if (!files.containsKey("assets/" + NS + "/sounds/" + sname + ".ogg")) files.put("assets/" + NS + "/sounds/" + sname + ".ogg", Files.readAllBytes(ogg.toPath()));
-            soundEvents.computeIfAbsent(sname, x -> new ArrayList<>());
-            if (!soundEvents.get(sname).contains(sname)) soundEvents.get(sname).add(sname);
+        // Every .ogg anywhere under models/ (0.33): models/sounds/shot.ogg = firearms:shot as before; in a subfolder the
+        // folders become dots - models/sounds/reload/mag_in.ogg = firearms:reload.mag_in, models/vfx/blood_splatter.ogg =
+        // firearms:vfx.blood_splatter - so a sound is played by its path, nothing to register.
+        List<File> oggs = new ArrayList<>();
+        try (var walk = Files.walk(dir.toPath())) { walk.filter(pth -> pth.toString().toLowerCase(Locale.ROOT).endsWith(".ogg") && Files.isRegularFile(pth)).sorted().forEach(pth -> oggs.add(pth.toFile())); }
+        for (File ogg : oggs) {
+            String rel = dir.toPath().relativize(ogg.toPath()).toString().replace(File.separatorChar, '/');
+            rel = rel.substring(0, rel.length() - 4).toLowerCase(Locale.ROOT);
+            if (rel.startsWith("sounds/")) rel = rel.substring(7);
+            String spath = String.join("/", java.util.Arrays.stream(rel.split("/")).map(x -> x.replaceAll("[^a-z0-9_]", "_")).toList());
+            String event = spath.replace('/', '.');
+            if (!files.containsKey("assets/" + NS + "/sounds/" + spath + ".ogg")) files.put("assets/" + NS + "/sounds/" + spath + ".ogg", Files.readAllBytes(ogg.toPath()));
+            soundEvents.computeIfAbsent(event, x -> new ArrayList<>());
+            if (!soundEvents.get(event).contains(spath)) soundEvents.get(event).add(spath);
         }
-        if (oggs != null && oggs.length > 0) report.add("sounds in the pack (use as firearms:<name> in guns.yml or keyframes): " + soundEvents.keySet());
+        if (!oggs.isEmpty()) report.add("sounds in the pack (use as firearms:<name> in guns.yml, keyframes or code): " + soundEvents.keySet());
         if (!soundEvents.isEmpty()) {
             JsonObject sj = new JsonObject();
             for (var e : soundEvents.entrySet()) {
@@ -656,6 +664,70 @@ public final class PackGenerator {
         }
         placeholder(dir, name, kind);
         placeholders++;
+    }
+
+    /** Models nobody's config names (0.33): every .bbmodel or Blockbench "Java item" .json in a SUBFOLDER of models/
+     *  (vfx/, attachments/, props/... - not players/, which are RP Engine rigs, nor sounds/) goes into the pack under its
+     *  path, e.g. models/vfx/blood_splatter.bbmodel = custom_model_data string "vfx/blood_splatter", spawnable with
+     *  Registry#modelItem("vfx/blood_splatter"). Top-level files stay opt-in (a stray gun there would cost client memory). */
+    private void standaloneModels(File dir, Set<String> done) throws IOException {
+        List<java.nio.file.Path> found = new ArrayList<>();
+        try (var walk = Files.walk(dir.toPath())) {
+            walk.filter(Files::isRegularFile).forEach(pth -> {
+                java.nio.file.Path rel = dir.toPath().relativize(pth);
+                String n = pth.getFileName().toString().toLowerCase(Locale.ROOT);
+                if (rel.getNameCount() < 2 || !(n.endsWith(".bbmodel") || n.endsWith(".json"))) return;
+                String top = rel.getName(0).toString().toLowerCase(Locale.ROOT);
+                if (top.equals("players") || top.equals("sounds")) return;
+                found.add(rel);
+            });
+        }
+        found.sort(null);
+        List<String> added = new ArrayList<>();
+        for (java.nio.file.Path rel : found) {
+            String r = rel.toString().replace(File.separatorChar, '/');
+            String name = r.substring(0, r.lastIndexOf('.'));
+            if (done.contains(name)) continue;
+            if (r.endsWith(".bbmodel")) model(dir, name, "static", done);
+            else { if (!done.add(name)) continue; jsonModel(new File(dir, r), name); }
+            if (cmdToModel.containsKey(name)) added.add(name);
+        }
+        if (!added.isEmpty()) report.add("standalone models (custom_model_data string = path, Registry#modelItem): " + added);
+    }
+
+    /** A Blockbench "Java Block/Item" export: copied with its textures, which are looked up as <name>.png NEXT to the
+     *  .json and moved to textures/item/<model path>/; vanilla references (minecraft:block/stone, block/stone) stay. */
+    private void jsonModel(File f, String name) throws IOException {
+        currentName = name;
+        JsonObject m;
+        try { m = JsonParser.parseString(Files.readString(f.toPath())).getAsJsonObject(); }
+        catch (Exception e) { warnings.add(name + ".json is not a valid model (" + e.getMessage() + ") - left out"); return; }
+        String mpath = path(name);
+        JsonObject out = new JsonObject();
+        if (m.has("textures") && m.get("textures").isJsonObject()) for (var e : m.getAsJsonObject("textures").entrySet()) {
+            String v = e.getValue().isJsonPrimitive() ? e.getValue().getAsString() : "";
+            String base = v.replaceAll("^.*[:/]", "").replaceAll("\\.png$", "");
+            File png = new File(f.getParentFile(), base + ".png");
+            if (v.startsWith("#") || base.isEmpty()) { out.add(e.getKey(), e.getValue()); continue; }
+            if (png.isFile()) {
+                byte[] bytes = Files.readAllBytes(png.toPath());
+                String tp = "assets/" + NS + "/textures/item/" + mpath + "/" + path(base) + ".png";
+                files.put(tp, bytes);
+                animatedTexture(png, bytes, tp, null);
+                out.addProperty(e.getKey(), NS + ":item/" + mpath + "/" + path(base));
+            } else if (v.startsWith("minecraft:") || v.startsWith("block/") || v.startsWith("item/")) {
+                out.add(e.getKey(), e.getValue());
+            } else {
+                warnings.add(name + ".json: texture '" + v + "' not found - put " + base + ".png next to the .json");
+                out.addProperty(e.getKey(), "minecraft:block/magenta_concrete");
+            }
+        }
+        m.add("textures", out);
+        if (!m.has("elements") && !m.has("parent")) { warnings.add(name + ".json has no elements and no parent - left out"); return; }
+        put("assets/" + NS + "/models/item/" + mpath + ".json", GSON.toJson(m));
+        cmdToModel.put(name, mpath);
+        cmdKind.put(name, "static");
+        models++;
     }
 
     /** The keys every per-model map holds right now; rollback() removes whatever was added since. */

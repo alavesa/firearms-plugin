@@ -38,7 +38,7 @@ final class DisplayRig {
         double[][][] lastSent;                             // per part: last transform sent (null = hidden)
         String clip; int frame = -1; double stretch = 1; int startTick; Runnable then;
         boolean aiming, spawned;
-        boolean shownAiming;                               // the state the client was last sent (H = the player's hip pose, A = the fixed aim pose)
+        double aimT;                                       // 0 = the hip pose H shown, 1 = the aim pose A; stepped by the server between them
         double lastPitch = 1e9; boolean lastSneak;
         double scale = -1;                                 // the rig scale last sent (display.rig.scale .. scale-open, by the wall check)
     }
@@ -172,30 +172,40 @@ final class DisplayRig {
             GunType heldNow = registry.gunOf(p.getInventory().getItemInMainHand());
             if (heldNow == null || !heldNow.id().equals(a.gun.id())) { hide(p); continue; }   // by id: a registry reload makes new GunType objects
             int duration = 1;
+            // H <-> A, stepped here one tick at a time (0.33): every part gets the SAME hand transform for the step, so the
+            // gun moves as one body. Before, the client blended each part on its own over aim-ticks (position along a
+            // straight line, rotation as a quaternion), so parts away from the pivot cut the corner and the gun came apart
+            // mid-swing; and any pitch update during the blend snapped it to the end.
+            double targetT = a.aiming ? 1 : 0;
+            boolean stepping = a.aimT != targetT;
+            if (stepping) {
+                double step = 1.0 / aimTicks();
+                a.aimT = targetT > a.aimT ? Math.min(targetT, a.aimT + step) : Math.max(targetT, a.aimT - step);
+            }
             if (a.clip != null) {
                 List<float[][]> frames = a.poses.clips.get(a.clip);
                 int idx = (int) Math.floor((now - a.startTick) / a.stretch);
                 if (idx >= frames.size()) {
                     a.clip = null; Runnable then = a.then; a.then = null;
-                    a.current = a.aiming && a.poses.clips.containsKey("aim") ? a.poses.clips.get("aim").get(0) : a.poses.rest;
+                    a.current = blendPose(a.poses, a.aimT);
                     duration = 2;
                     if (then != null) then.run();
                 } else if (idx != a.frame) { a.frame = idx; a.current = frames.get(idx); duration = Math.max(1, (int) Math.round(a.stretch)); }
                 else duration = 0;
+            } else if (stepping) {
+                a.current = blendPose(a.poses, a.aimT);
             } else {
-                float[][] want = a.aiming && a.poses.clips.containsKey("aim") ? a.poses.clips.get("aim").get(0) : a.poses.rest;
-                if (want != a.current) { a.current = want; duration = aimTicks(); }
+                float[][] want = a.aimT >= 1 && a.poses.clips.containsKey("aim") ? a.poses.clips.get("aim").get(0) : a.poses.rest;
+                if (want != a.current) { a.current = want; duration = 1; }
                 else duration = 0;
             }
-            // H <-> A: the client interpolates every part (position and scale linearly, rotation as a quaternion) from
-            // where it is to the other state over aim-ticks, whatever the player's own /viewmodel hip offset is
-            boolean switchAim = a.aiming != a.shownAiming;
-            if (switchAim) { a.shownAiming = a.aiming; duration = Math.max(duration, aimTicks()); }
+            boolean switchAim = stepping;   // a step moves every part
+            if (stepping) duration = 1;
             // Rig scale: only as small as the wall in front needs. Any scale gives the same picture from a still camera, so
             // the change is invisible - but the smaller the rig, the more the camera's own motion (view bobbing, the pitch
             // correction arriving a tick late) moves it on screen: at 0.4 everywhere (0.31) walking and looking up/down
             // swung the gun 2.5x as much as at full size. Shrinks within a tick, grows back over scale-ticks.
-            double want = wantedScale(p, a.aiming);
+            double want = wantedScale(p, a.aimT > 0.5);
             if (a.scale < 0 || Math.abs(want - a.scale) >= 0.05 || (want != a.scale && (want == scaleMin() || want == scaleOpen()))) {
                 boolean shrink = a.scale >= 0 && want < a.scale;
                 a.scale = want;
@@ -218,8 +228,9 @@ final class DisplayRig {
         double[][] offC = eyeOffsetInCamera(pitch, sneak);
         // H = the gun's hip pose + this player's /viewmodel offset; A = the fixed aim pose for everyone (guns.yml aim-pose,
         // on top of the aim clip's end pose), with no player offset, so a customised H never moves the shared sight line
-        Viewmodels.Setting vm = a.aiming ? new Viewmodels.Setting() : plugin.viewmodels() != null ? plugin.viewmodels().of(p) : new Viewmodels.Setting();
-        double[][] hand = handChain(a.poses, vm, a.aiming, a.gun.aimPose());
+        Viewmodels.Setting vm = plugin.viewmodels() != null ? plugin.viewmodels().of(p) : new Viewmodels.Setting();
+        double[][] hand = handChain(a.poses, vm, a.aimT, a.gun.aimPose());
+        List<Object> packets = new ArrayList<>();
         for (int i = 0; i < a.parts.size(); i++) {
             NmsDisplay.Part part = a.parts.get(i);
             if (part == null) continue;
@@ -232,38 +243,89 @@ final class DisplayRig {
             if (all && i < 6 && plugin.getConfig().getBoolean("display.rig.debug", false))
                 plugin.getLogger().info(String.format("rig part %d (%s, variant %d): %s translation [%.3f %.3f %.3f] scale [%.3f %.3f %.3f] pitch %.1f offC y %.3f z %.3f", i, a.poses.partCmd[i], a.poses.partVariant[i], m == null ? "HIDDEN" : "", tf[0][3], tf[1][3], tf[2][3],
                     Math.sqrt(tf[0][0]*tf[0][0]+tf[1][0]*tf[1][0]+tf[2][0]*tf[2][0]), Math.sqrt(tf[0][1]*tf[0][1]+tf[1][1]*tf[1][1]+tf[2][1]*tf[2][1]), Math.sqrt(tf[0][2]*tf[0][2]+tf[1][2]*tf[1][2]+tf[2][2]*tf[2][2]), pitch, offC[1][0], offC[2][0]));
-            try { NmsDisplay.transform(part, tf, cameraMoved && duration == 0 ? pitchBlend() : duration); if (!all || a.spawned) NmsDisplay.update(p, part); }
+            try { NmsDisplay.transform(part, tf, cameraMoved && duration == 0 ? pitchBlend() : duration); if (!all || a.spawned) { Object pk = NmsDisplay.updatePacket(part); if (pk != null) packets.add(pk); } }
             catch (Exception e) { plugin.getLogger().warning("Display rig update failed: " + e); }
         }
+        // one bundle: the client applies every part's new transform in the same tick (single packets could straddle a
+        // client tick and show half the gun a tick behind the other half)
+        try { NmsDisplay.sendAll(p, packets); } catch (Exception e) { plugin.getLogger().warning("Display rig update failed: " + e); }
+    }
+
+    /** The rest pose blended toward the aim clip's pose by t, per part: translation and scale linearly, rotation as a
+     *  quaternion. These are the parts' poses inside the gun (small moves); the big hip-to-aim move is the shared hand. */
+    private static float[][] blendPose(ModelPoses mp, double t) {
+        List<float[][]> aim = mp.clips.get("aim");
+        if (aim == null || aim.isEmpty() || t <= 0) return mp.rest;
+        float[][] b = aim.get(0);
+        if (t >= 1) return b;
+        float[][] out = new float[mp.rest.length][];
+        for (int i = 0; i < out.length; i++) {
+            float[] r = mp.rest[i], q = i < b.length ? b[i] : null;
+            out[i] = r == null || q == null ? (t < 0.5 ? r : q) : lerpPose(r, q, (float) t);
+        }
+        return out;
+    }
+    /** Interpolate two 3x4 row-major part matrices; a mirrored and an unmirrored one cannot be blended (picked instead). */
+    static float[] lerpPose(float[] a, float[] b, float t) {
+        float[] sa = new float[3], sb = new float[3];
+        org.joml.Quaternionf qa = rotationOf(a, sa), qb = rotationOf(b, sb);
+        if (qa == null || qb == null || Math.signum(sa[0]) != Math.signum(sb[0])) return t < 0.5f ? a : b;
+        org.joml.Matrix3f r = new org.joml.Matrix3f().set(qa.slerp(qb, t));
+        float[] s = new float[3]; for (int k = 0; k < 3; k++) s[k] = sa[k] + (sb[k] - sa[k]) * t;
+        float[] o = new float[12];
+        for (int row = 0; row < 3; row++) {
+            for (int col = 0; col < 3; col++) o[row * 4 + col] = r.get(col, row) * s[col];
+            o[row * 4 + 3] = a[row * 4 + 3] + (b[row * 4 + 3] - a[row * 4 + 3]) * t;
+        }
+        return o;
+    }
+    /** Rotation of a 3x4 row-major matrix, its column scales into `scale` (x negative when mirrored); null if degenerate. */
+    private static org.joml.Quaternionf rotationOf(float[] m, float[] scale) {
+        org.joml.Matrix3f r = new org.joml.Matrix3f();
+        for (int col = 0; col < 3; col++) {
+            float x = m[col], y = m[4 + col], z = m[8 + col];
+            float len = (float) Math.sqrt(x * x + y * y + z * z);
+            if (len < 1e-6f) return null;
+            scale[col] = len;
+            r.set(col, 0, x / len); r.set(col, 1, y / len); r.set(col, 2, z / len);
+        }
+        if (r.determinant() < 0) { scale[0] = -scale[0]; r.set(0, 0, -r.get(0, 0)); r.set(0, 1, -r.get(0, 1)); r.set(0, 2, -r.get(0, 2)); }
+        return new org.joml.Quaternionf().setFromNormalized(r);
     }
 
     // ---------------------------------------------------------------- the maths
 
     /** T(hand) T(tr/16) R(rot) S(sc) T(-0.5): the gun's own first-person transform, then vanilla's hand placement. */
-    private double[][] handChain(ModelPoses mp, Viewmodels.Setting vm, boolean aiming, org.bukkit.configuration.ConfigurationSection aimPose) {
-        // hip: vanilla's hand point (0.56 right, 0.52 down, 0.72 ahead); aim: the gun centred under the eye line (display.rig.aim-hand),
-        // on top of which the model's aim clip (if any) and the gun's aim-pose adjust apply
-        double[] h = aiming ? list3("display.rig.aim-hand", new double[]{0.06, -0.235, -1.1}) : list3("display.rig.hand", new double[]{0.56, -0.52, -0.72});
-        double[] extra = aiming ? new double[]{0, 0, 0} : list3("display.rig.offset", new double[]{0, 0, 0});
+    private double[][] handChain(ModelPoses mp, Viewmodels.Setting vm, double t, org.bukkit.configuration.ConfigurationSection aimPose) {
+        // hip (t 0): vanilla's hand point (0.56 right, 0.52 down, 0.72 ahead) + the player's /viewmodel offset; aim (t 1): the
+        // gun centred under the eye line (display.rig.aim-hand), on top of which the model's aim clip (if any) and the gun's
+        // aim-pose adjust apply. In between every term moves by t, so all parts share one rigid transform per step.
+        boolean aiming = t > 0;
+        double u = 1 - t;
+        double[] hh = list3("display.rig.hand", new double[]{0.56, -0.52, -0.72}), ha = list3("display.rig.aim-hand", new double[]{0.06, -0.235, -1.1});
+        double[] h = { hh[0] + (ha[0] - hh[0]) * t, hh[1] + (ha[1] - hh[1]) * t, hh[2] + (ha[2] - hh[2]) * t };
+        double[] off0 = list3("display.rig.offset", new double[]{0, 0, 0});
+        double[] extra = { off0[0] * u, off0[1] * u, off0[2] * u };
         // Aiming zooms the client's field of view (the aim.speed-multiplier: fov x (mult + 1) / 2), and the rig is a world
         // entity, so it would be magnified with the world. Everything in the aim placement is pushed out by the inverse, so
         // the gun keeps its screen size and spot: aim-hand is given in un-zoomed view units.
-        double zoomComp = aiming ? 2.0 / (1.0 + Math.max(0.05, plugin.getConfig().getDouble("aim.speed-multiplier", 0.35))) : 1.0;
-        double[][] t = translate((h[0] + extra[0] + vm.x / 16.0) * zoomComp, (h[1] + extra[1] + vm.y / 16.0) * zoomComp, (h[2] + extra[2] - vm.z / 16.0) * zoomComp);
+        double zoomComp = 1.0 + (2.0 / (1.0 + Math.max(0.05, plugin.getConfig().getDouble("aim.speed-multiplier", 0.35))) - 1.0) * t;
+        double[][] tm = translate((h[0] + extra[0] + u * vm.x / 16.0) * zoomComp, (h[1] + extra[1] + u * vm.y / 16.0) * zoomComp, (h[2] + extra[2] - u * vm.z / 16.0) * zoomComp);
         if (aiming && aimPose != null) {
             // the gun's aim-state adjust (guns.yml aim-pose / `/firearms pose <gun> aim ...`): offset in sixteenths of a block
             // (right, up, forward), rotation in degrees and a scale, applied about the hand point in view space
             double[] off = vec3(aimPose, "offset", new double[]{0, 0, 0}), rot = vec3(aimPose, "rotation", new double[]{0, 0, 0});
-            double sc0 = aimPose.getDouble("scale", 1.0);
+            for (int k = 0; k < 3; k++) { off[k] *= t; rot[k] *= t; }
+            double sc0 = 1.0 + (aimPose.getDouble("scale", 1.0) - 1.0) * t;
             double[] hz = { h[0] * zoomComp, h[1] * zoomComp, h[2] * zoomComp };
             double[][] adj = mul(mul(mul(translate(hz[0] + off[0] / 16.0 * zoomComp, hz[1] + off[1] / 16.0 * zoomComp, hz[2] - off[2] / 16.0 * zoomComp), rotXYZ(rot)), scale(sc0, sc0, sc0)), translate(-hz[0], -hz[1], -hz[2]));
-            t = mul(adj, t);
+            tm = mul(adj, tm);
         }
         double[][] tr = translate(mp.fpTranslation[0] / 16, mp.fpTranslation[1] / 16, mp.fpTranslation[2] / 16);
         // the model's first-person rotation is the hip cant (barrel pointing inward); on the sights the gun runs parallel to the view
-        double[][] r = aiming && plugin.getConfig().getBoolean("display.rig.aim-straight", true) ? identity() : rotXYZ(mp.fpRotation);
+        double[][] r = plugin.getConfig().getBoolean("display.rig.aim-straight", true) ? rotXYZ(new double[]{mp.fpRotation[0] * u, mp.fpRotation[1] * u, mp.fpRotation[2] * u}) : rotXYZ(mp.fpRotation);
         double[][] sc = scale(mp.fpScale[0], mp.fpScale[1], mp.fpScale[2]);
-        return mul(mul(mul(mul(t, tr), r), sc), translate(-0.5, -0.5, -0.5));
+        return mul(mul(mul(mul(tm, tr), r), sc), translate(-0.5, -0.5, -0.5));
     }
     private double scaleMin() { return Math.max(0.1, Math.min(1.0, plugin.getConfig().getDouble("display.rig.scale", 0.4))); }
     private double scaleOpen() { return Math.max(scaleMin(), Math.min(1.0, plugin.getConfig().getDouble("display.rig.scale-open", 1.0))); }

@@ -437,6 +437,16 @@ public final class Registry {
         return c;
     }
 
+    /** An item showing any model in the pack by its custom_model_data string, e.g. a standalone "vfx/blood_splatter"
+     *  (models/vfx/blood_splatter.bbmodel) - for item displays. */
+    public ItemStack modelItem(String model) {
+        ItemStack item = new ItemStack(base());
+        ItemMeta meta = item.getItemMeta();
+        setModel(meta, model);
+        item.setItemMeta(meta);
+        return item;
+    }
+
     public ItemStack buildCasing(String model) {
         ItemStack item = new ItemStack(base());
         ItemMeta meta = item.getItemMeta();
