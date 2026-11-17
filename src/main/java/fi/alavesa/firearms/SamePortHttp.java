@@ -27,7 +27,9 @@ import java.util.function.Supplier;
  * handshake starts with a packet length byte, an HTTP download with {@code GET } or {@code HEAD }. For the latter the
  * game's own handlers are taken out of that connection and the zip is written back as an HTTP response; everything
  * else is passed on untouched, so players, pings and proxies see no difference. (RP Engine's "same-port" mode is the
- * same idea.) Does not work behind a Velocity / BungeeCord proxy, which only forwards the Minecraft protocol.
+ * same idea.) Several plugins can do this on one port: a request whose path is not under /firearms is passed on
+ * unchanged to the next handler. Does not work behind a Velocity / BungeeCord proxy, which only forwards the
+ * Minecraft protocol.
  */
 final class SamePortHttp {
     private static final String PARENT = "firearms_http_accept", CHILD = "firearms_http";
@@ -112,16 +114,23 @@ final class SamePortHttp {
             String text = head.toString(StandardCharsets.US_ASCII);
             int end = text.indexOf("\r\n\r\n");
             if (end < 0) { if (head.readableBytes() > 16384) ctx.close(); return; }
-            answered = true;
             String line = text.substring(0, text.indexOf("\r\n"));
             String[] parts = line.split(" ");
             String method = parts.length > 0 ? parts[0] : "", path = parts.length > 1 ? parts[1] : "";
+            if (!path.contains("/firearms")) {
+                // not ours: another plugin's same-port handler (SuperbVehicles, CCTV, Lighting, Radio...) may serve it - hand the bytes on
+                ByteBuf h = head; head = null;
+                ctx.pipeline().remove(this);
+                ctx.fireChannelRead(h);
+                return;
+            }
+            answered = true;
             head.release(); head = null;
             // the game's handlers must never see this connection again (and their read timeout must not kill the download)
             ChannelPipeline p = ctx.pipeline();
             for (String name : new ArrayList<>(p.names())) if (!name.equals(CHILD) && p.get(name) != null) try { p.remove(name); } catch (Throwable ignored) { }
             File f = zip.get();
-            if (!path.contains("/firearms") || !path.endsWith(".zip") || f == null || !f.isFile()) { reply(ctx, "404 Not Found", 0, null, method.equals("HEAD")); return; }
+            if (!path.endsWith(".zip") || f == null || !f.isFile()) { reply(ctx, "404 Not Found", 0, null, method.equals("HEAD")); return; }
             reply(ctx, "200 OK", f.length(), f, method.equals("HEAD"));
         }
 
