@@ -21,8 +21,14 @@ import java.util.UUID;
  * Maths (verified in the 26.3 client): a CENTER-billboarded display's local frame is the camera frame (+Z
  * forward, +X left, +Y up); the item display renderer then turns the item 180 degrees about Y and draws the
  * item model centred. Vanilla draws a first-person item at view-space (0.56, -0.52, -0.72) after the item's own
- * firstperson_righthand transform, with the model centred at (8,8,8). The rig reproduces exactly that chain, and
- * corrects for the entity riding at the player's passenger point (0.18 blocks above the eyes when standing).
+ * firstperson_righthand transform, with the model centred at (8,8,8). The rig reproduces exactly that chain.
+ * <p>
+ * Since 0.34 the parts ride a client-side spacer ({@link NmsDisplay#createSpacer}) that puts their origin exactly
+ * at the eye, in every pose. Before, they rode the player's passenger point 0.18 above the eye (0.23 sneaking) and
+ * the server corrected for it whenever the pitch changed - one round trip late, which was the gun swaying when
+ * looking up and down and dipping when crouching. Now nothing depends on the pitch: the server sends a pose only
+ * when the pose changes, and a new spacer height only when the player's own pose (standing, sneaking, swimming)
+ * changes.
  */
 final class DisplayRig {
     static final class ModelPoses {
@@ -41,6 +47,9 @@ final class DisplayRig {
         double aimT;                                       // 0 = the hip pose H shown, 1 = the aim pose A; stepped by the server between them
         double lastPitch = 1e9; boolean lastSneak;
         double scale = -1;                                 // the rig scale last sent (display.rig.scale .. scale-open, by the wall check)
+        int lastNearWall = -1000; double scaleShown = -1;
+        NmsDisplay.Part spacer;                            // between the player and the parts: puts the rig origin at the eye
+        float spacerHeight;                                // eye height - passenger point, sent last
     }
 
     private final FirearmsPlugin plugin;
@@ -118,7 +127,15 @@ final class DisplayRig {
                 plugin.getLogger().info("Display rig STATIC TEST for " + p.getName() + ": " + real.size() + " part(s) at " + at.getBlockX() + "," + at.getBlockY() + "," + at.getBlockZ());
             } else send(p, a, 0, true);
             for (NmsDisplay.Part pt : real) NmsDisplay.spawn(p, pt);
-            if (!staticTest) NmsDisplay.ride(p, real);
+            if (!staticTest) {
+                if (useSpacer()) {
+                    a.spacerHeight = spacerHeight(p);
+                    a.spacer = NmsDisplay.createSpacer(p, a.spacerHeight);
+                    NmsDisplay.spawn(p, a.spacer);
+                    NmsDisplay.ride(p, List.of(a.spacer));
+                    NmsDisplay.ride(p, a.spacer, real);
+                } else NmsDisplay.ride(p, real);
+            }
             a.spawned = true;
             if (staticTest) a.lastPitch = -1e9;   // never re-sent
             active.put(p.getUniqueId(), a);
@@ -132,8 +149,14 @@ final class DisplayRig {
     void hide(Player p) {
         Active a = active.remove(p.getUniqueId());
         if (a == null) return;
-        try { List<NmsDisplay.Part> real = new ArrayList<>(); for (NmsDisplay.Part pt : a.parts) if (pt != null) real.add(pt); NmsDisplay.remove(p, real); } catch (Exception ignored) { }
+        try { List<NmsDisplay.Part> real = new ArrayList<>(); for (NmsDisplay.Part pt : a.parts) if (pt != null) real.add(pt); if (a.spacer != null) real.add(a.spacer); NmsDisplay.remove(p, real); } catch (Exception ignored) { }
     }
+
+    /** The spacer is on unless display.rig.spacer is false (then: the pre-0.34 pitch correction). */
+    private boolean useSpacer() { return plugin.getConfig().getBoolean("display.rig.spacer", true); }
+
+    /** Eye height minus the player's passenger point (the top of the hit box), for the pose the player is in now. */
+    private static float spacerHeight(Player p) { return (float) (p.getEyeHeight() - p.getHeight()); }
 
     /** Play a clip on the rig: one pose per tick from the file, stretched to totalTicks when > 0; `then` runs at the end. */
     void play(Player p, String clip, int totalTicks, Runnable then) {
@@ -209,8 +232,24 @@ final class DisplayRig {
             if (a.scale < 0 || Math.abs(want - a.scale) >= 0.05 || (want != a.scale && (want == scaleMin() || want == scaleOpen()))) {
                 boolean shrink = a.scale >= 0 && want < a.scale;
                 a.scale = want;
-                if (!switchAim) duration = Math.max(duration, shrink ? 1 : Math.max(1, plugin.getConfig().getInt("display.rig.scale-ticks", 3)));
-                switchAim = true;   // every part
+                // Shrinking happens in the same frame the packet arrives (no blend): with the rig turning about the eye, a
+                // uniform scale about the eye leaves the picture exactly as it was, so there is nothing to see. Growing back
+                // waits until the wall has been out of reach for a while and then blends, so a player brushing past a
+                // corner does not make the rig pump.
+                if (shrink) { duration = 0; switchAim = true; }
+                else if (now - a.lastNearWall >= plugin.getConfig().getInt("display.rig.scale-hold-ticks", 10)) {
+                    if (!switchAim) duration = Math.max(duration, Math.max(1, plugin.getConfig().getInt("display.rig.scale-ticks", 3)));
+                    switchAim = true;
+                } else a.scale = a.scaleShown;   // keep the small rig a little longer
+            }
+            if (want < scaleOpen()) a.lastNearWall = now;
+            a.scaleShown = a.scale;
+            if (a.spacer != null) {
+                float h = spacerHeight(p);
+                if (Math.abs(h - a.spacerHeight) > 1e-3) {
+                    a.spacerHeight = h;
+                    try { NmsDisplay.spacerHeight(a.spacer, h); NmsDisplay.update(p, a.spacer); } catch (Exception ex) { plugin.getLogger().warning("Display rig spacer update failed: " + ex); }
+                }
             }
             send(p, a, duration, switchAim);
         }
@@ -222,10 +261,11 @@ final class DisplayRig {
         double pitch = p.getLocation().getPitch();
         boolean sneak = p.isSneaking();
         if (a.lastPitch == -1e9) return;   // debug tests: frozen
-        boolean cameraMoved = Math.abs(pitch - a.lastPitch) > 0.5 || sneak != a.lastSneak;
+        // with the spacer the rig turns about the eye: the pitch and the pose need no correction from here
+        boolean cameraMoved = a.spacer == null && (Math.abs(pitch - a.lastPitch) > 0.5 || sneak != a.lastSneak);
         if (!all && duration == 0 && !cameraMoved) return;
         a.lastPitch = pitch; a.lastSneak = sneak;
-        double[][] offC = eyeOffsetInCamera(pitch, sneak);
+        double[][] offC = a.spacer != null ? new double[][]{{0}, {0}, {0}} : eyeOffsetInCamera(pitch, sneak);
         // H = the gun's hip pose + this player's /viewmodel offset; A = the fixed aim pose for everyone (guns.yml aim-pose,
         // on top of the aim clip's end pose), with no player offset, so a customised H never moves the shared sight line
         Viewmodels.Setting vm = plugin.viewmodels() != null ? plugin.viewmodels().of(p) : new Viewmodels.Setting();
@@ -327,7 +367,7 @@ final class DisplayRig {
         double[][] sc = scale(mp.fpScale[0], mp.fpScale[1], mp.fpScale[2]);
         return mul(mul(mul(mul(tm, tr), r), sc), translate(-0.5, -0.5, -0.5));
     }
-    private double scaleMin() { return Math.max(0.1, Math.min(1.0, plugin.getConfig().getDouble("display.rig.scale", 0.4))); }
+    private double scaleMin() { return Math.max(0.05, Math.min(1.0, plugin.getConfig().getDouble("display.rig.scale", 0.2))); }
     private double scaleOpen() { return Math.max(scaleMin(), Math.min(1.0, plugin.getConfig().getDouble("display.rig.scale-open", 1.0))); }
     /** Ticks the client blends a pitch-only correction over (0 = at once: the least lag, the most stepping). */
     private int pitchBlend() { return Math.max(0, plugin.getConfig().getInt("display.rig.pitch-blend-ticks", 0)); }
@@ -339,17 +379,28 @@ final class DisplayRig {
         if (hi <= lo || !plugin.getConfig().getBoolean("display.rig.wall-check", true)) return lo;
         double reach = aiming ? plugin.getConfig().getDouble("display.rig.reach-aim", 1.9) : plugin.getConfig().getDouble("display.rig.reach-hip", 1.3);
         org.bukkit.Location eye = p.getEyeLocation();
+        // Look ahead: the server sees the player a round trip after the client drew them, so test from where the eye will
+        // be a few ticks on (display.rig.scale-lead-ticks), and test a bit further than the gun reaches
+        // (display.rig.scale-margin): the rig is small before the barrel could ever reach the wall.
+        org.bukkit.util.Vector v = p.getVelocity().clone(); v.setY(0);
+        double lead = plugin.getConfig().getDouble("display.rig.scale-lead-ticks", 4) + Math.min(10, p.getPing() / 50.0);
+        double margin = plugin.getConfig().getDouble("display.rig.scale-margin", 0.6);
+        double speed = Math.max(v.length(), p.isSprinting() ? 0.28 : 0);   // velocity of players is often 0 server-side
+        org.bukkit.util.Vector heading = p.getLocation().getDirection().setY(0);
+        if (heading.lengthSquared() > 1e-6) heading.normalize();
+        eye = eye.clone().add(heading.multiply(speed * lead));
         org.bukkit.util.Vector f = eye.getDirection();
         double yaw = Math.toRadians(eye.getYaw());
         org.bukkit.util.Vector right = new org.bukkit.util.Vector(-Math.cos(yaw), 0, -Math.sin(yaw));
         org.bukkit.util.Vector up = right.clone().crossProduct(f);
         double[] h = list3("display.rig.hand", new double[]{0.56, -0.52, -0.72});
-        org.bukkit.util.Vector toHand = right.clone().multiply(h[0]).add(up.multiply(h[1])).add(f.clone().multiply(-h[2])).normalize();
+        org.bukkit.util.Vector toHand = right.clone().multiply(h[0]).add(up.clone().multiply(h[1])).add(f.clone().multiply(-h[2])).normalize();
         double rs = hi;
-        for (org.bukkit.util.Vector dir : aiming ? new org.bukkit.util.Vector[]{f} : new org.bukkit.util.Vector[]{f, toHand}) {
-            var hit = p.getWorld().rayTraceBlocks(eye, dir, reach * hi, org.bukkit.FluidCollisionMode.NEVER, true);
+        org.bukkit.util.Vector below = f.clone().add(up.clone().multiply(-0.45)).normalize();   // the barrel sits below the view line
+        for (org.bukkit.util.Vector dir : aiming ? new org.bukkit.util.Vector[]{f, below} : new org.bukkit.util.Vector[]{f, toHand, below}) {
+            var hit = p.getWorld().rayTraceBlocks(eye, dir, reach * hi + margin, org.bukkit.FluidCollisionMode.NEVER, true);
             if (hit == null) continue;
-            rs = Math.min(rs, (hit.getHitPosition().distance(eye.toVector()) - 0.05) / reach);
+            rs = Math.min(rs, (hit.getHitPosition().distance(eye.toVector()) - 0.05 - margin) / reach);
         }
         return Math.max(lo, Math.min(hi, rs));
     }

@@ -1148,23 +1148,38 @@ public final class PackGenerator {
                 else if (ch.equals("position")) clip.posKeys.computeIfAbsent(en.getKey(), x -> new ArrayList<>()).add(trackKey(k));
                 else if (ch.equals("scale")) clip.scaleKeys.computeIfAbsent(en.getKey(), x -> new ArrayList<>()).add(trackKey(k));
                 else if (ch.equals("sound") && clipSounds != null) {
-                    // {effect: "name", file: "C:/.../name.ogg"}: the audio is NOT inside the .bbmodel, so it is looked
-                    // up in models/sounds/<name>.ogg (or the keyframe's own path).
+                    // {effect: "name", file: "C:\\Users\\...\\name.ogg"}: the audio is NOT inside the .bbmodel, so it is looked up
+                    // by name among every .ogg under models/ (any folder). The stored path is the animator's own computer
+                    // (usually Windows: backslashes, which are not separators here - that made every keyframe sound miss up
+                    // to 0.33.1), so only its last part counts.
                     JsonArray dp = k.has("data_points") ? k.getAsJsonArray("data_points") : new JsonArray();
                     for (JsonElement de : dp) {
                         JsonObject d = de.getAsJsonObject();
-                        String file = str(d.get("file"), "");
-                        String ev = str(d.get("effect"), "");
-                        if (ev.isEmpty() && !file.isEmpty()) ev = new File(file).getName().replaceAll("\\.ogg$", "");
-                        if (ev.isEmpty()) continue;
-                        String sname = ev.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_]", "_");
-                        File ogg = new File(new File(bb.getParentFile(), "sounds"), sname + ".ogg");
-                        if (!ogg.exists()) ogg = new File(bb.getParentFile(), sname + ".ogg");
-                        if (!ogg.exists() && !file.isEmpty() && new File(file).exists()) ogg = new File(file);
-                        if (!ogg.exists()) { if (clampNoted.add(name + "|snd|" + sname)) warnings.add(name + ": sound '" + ev + "' (animation '" + clip.name + "') - put " + sname + ".ogg into models/sounds/"); continue; }
-                        files.put("assets/" + NS + "/sounds/" + sname + ".ogg", Files.readAllBytes(ogg.toPath()));
-                        soundEvents.computeIfAbsent(sname, x -> new ArrayList<>());
-                        if (!soundEvents.get(sname).contains(sname)) soundEvents.get(sname).add(sname);
+                        String file = baseName(str(d.get("file"), ""));
+                        String ev = baseName(str(d.get("effect"), ""));
+                        String fileStem = file.replaceAll("(?i)\\.(ogg|wav|mp3|flac|m4a)$", ""), evStem = ev.replaceAll("(?i)\\.(ogg|wav|mp3|flac|m4a)$", "");
+                        if (fileStem.isEmpty() && evStem.isEmpty()) continue;
+                        // the file name wins (it is what the animator heard in Blockbench); the effect name is the fallback
+                        File ogg = null;
+                        String sname = null;
+                        for (String cand : new String[]{fileStem, evStem}) {
+                            if (cand.isEmpty()) continue;
+                            String key = soundKey(cand);
+                            File found = oggIndex(bb).get(key);
+                            if (found != null) { ogg = found; sname = key; break; }
+                            if (sname == null) sname = key;
+                        }
+                        if (ogg == null) {
+                            String hint = file.toLowerCase(Locale.ROOT).matches(".*\\.(wav|mp3|flac|m4a)$") ? " (Minecraft plays only .ogg: convert " + file + " to " + sname + ".ogg)" : "";
+                            if (clampNoted.add(name + "|snd|" + sname)) warnings.add(name + ": sound '" + (file.isEmpty() ? ev : file) + "' (animation '" + clip.name + "') not found - put " + sname + ".ogg anywhere under models/" + hint);
+                            continue;
+                        }
+                        String spath = soundPathOf(bb, ogg);
+                        files.put("assets/" + NS + "/sounds/" + spath + ".ogg", Files.readAllBytes(ogg.toPath()));
+                        String event = spath.replace('/', '.');
+                        soundEvents.computeIfAbsent(event, x -> new ArrayList<>());
+                        if (!soundEvents.get(event).contains(spath)) soundEvents.get(event).add(spath);
+                        sname = event;
                         long tick = Math.round(num(k.get("time"), 0) * 20);
                         clipSounds.add(tick + ":" + NS + ":" + sname);
                     }
@@ -1173,6 +1188,45 @@ public final class PackGenerator {
         }
         clip.seal();
         return clip;
+    }
+
+    /** The last part of a path written on any system (Windows backslashes included). */
+    static String baseName(String path) {
+        String s = path.trim();
+        int cut = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+        return cut >= 0 ? s.substring(cut + 1) : s;
+    }
+
+    /** How a sound name is matched: lower case, everything but a-z 0-9 _ turned into _. */
+    static String soundKey(String stem) {
+        return stem.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_]", "_");
+    }
+
+    private Map<String, File> oggIndex;
+
+    /** Every .ogg under models/, by {@link #soundKey} of its file name (the first one found wins). */
+    private Map<String, File> oggIndex(File bb) throws IOException {
+        if (oggIndex != null) return oggIndex;
+        oggIndex = new LinkedHashMap<>();
+        File models = new File(plugin.getDataFolder(), "models");
+        if (!models.isDirectory()) models = bb.getParentFile();
+        try (var walk = Files.walk(models.toPath())) {
+            for (var pth : walk.filter(x -> x.toString().toLowerCase(Locale.ROOT).endsWith(".ogg") && Files.isRegularFile(x)).sorted().toList()) {
+                String n = pth.getFileName().toString();
+                oggIndex.putIfAbsent(soundKey(n.substring(0, n.length() - 4)), pth.toFile());
+            }
+        }
+        return oggIndex;
+    }
+
+    /** The pack path of an .ogg under models/, the same rule as the folder scan: models/sounds/x.ogg -> x, models/vfx/y.ogg -> vfx/y. */
+    private String soundPathOf(File bb, File ogg) {
+        File models = new File(plugin.getDataFolder(), "models");
+        if (!models.isDirectory()) models = bb.getParentFile();
+        String rel = models.toPath().relativize(ogg.toPath()).toString().replace(File.separatorChar, '/');
+        rel = rel.substring(0, rel.length() - 4).toLowerCase(Locale.ROOT);
+        if (rel.startsWith("sounds/")) rel = rel.substring(7);
+        return String.join("/", java.util.Arrays.stream(rel.split("/")).map(x -> x.replaceAll("[^a-z0-9_]", "_")).toList());
     }
 
     /** A Blockbench keyframe -> Track key: first data point (x,y,z as numbers or numeric strings), its interpolation and bezier handles. */

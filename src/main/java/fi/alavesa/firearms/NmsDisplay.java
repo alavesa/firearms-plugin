@@ -20,7 +20,9 @@ final class NmsDisplay {
     private static Constructor<?> itemDisplayCtor, addEntityCtor, setDataCtor, passengersCtor, removeCtor, transformationCtor, matrixCtor;
     private static Method getUuid, getX, getY, getZ, getType;
     private static Object vec3Zero;
-    private static Object itemDisplayType, billboardCenter, contextFixed;
+    private static Object itemDisplayType, interactionType, billboardCenter, contextFixed;
+    private static Constructor<?> interactionCtor;
+    private static Method setInteractionWidth, setInteractionHeight;
     private static Method setTransformation, setInterpDuration, setInterpDelay, setBillboard, setViewRange, setItemStack, setItemTransform,
         getId, getEntityData, nonDefaultValues, packDirty, setPos, asNms, worldHandle, matrixSet;
 
@@ -58,6 +60,16 @@ final class NmsDisplay {
             }
             if (itemDisplayType == null) throw new IllegalStateException("EntityType ITEM_DISPLAY not found (EntityTypes / EntityType / registry)");
             itemDisplayCtor = itemDisplay.getConstructor(entityType, level);
+            // the spacer between player and rig (see Spacer)
+            for (String holder : new String[]{"net.minecraft.world.entity.EntityTypes", "net.minecraft.world.entity.EntityType"}) {
+                if (interactionType != null) break;
+                try { for (Field f : Class.forName(holder).getFields()) if (f.getName().equals("INTERACTION")) { interactionType = f.get(null); break; } } catch (ClassNotFoundException ignored) { }
+            }
+            if (interactionType == null) throw new IllegalStateException("EntityType INTERACTION not found");
+            Class<?> interaction = Class.forName("net.minecraft.world.entity.Interaction");
+            interactionCtor = interaction.getConstructor(entityType, level);
+            setInteractionWidth = interaction.getMethod("setWidth", float.class);
+            setInteractionHeight = interaction.getMethod("setHeight", float.class);
             billboardCenter = billboard.getField("CENTER").get(null);
             contextFixed = context.getField("FIXED").get(null);
             setTransformation = display.getMethod("setTransformation", transformation);
@@ -99,6 +111,29 @@ final class NmsDisplay {
         final Object entity; final int id;
         Part(Object entity, int id) { this.entity = entity; this.id = id; }
     }
+
+    /**
+     * The spacer: a client-side interaction entity of width 0 and NEGATIVE height that rides the player, with the rig
+     * riding it. A passenger sits at its vehicle's passenger point, which for an interaction is (0, height, 0): with
+     * height = eye height - passenger point of the player (-0.18 standing, -0.23 sneaking), the rig's origin is
+     * exactly the camera. Then the billboarded rig turns about the eye itself and needs no pitch correction from the
+     * server at all - that correction, always a network round trip late, was the gun's sway when looking up and
+     * down, and its sneak counterpart the dip when crouching. The client never aims clicks at it: it rides the
+     * player, and the client skips everything that shares a vehicle with the camera entity.
+     */
+    static Part createSpacer(Player viewer, float height) throws Exception {
+        Object world = viewer.getWorld();
+        if (worldHandle == null) worldHandle = world.getClass().getMethod("getHandle");
+        Object e = interactionCtor.newInstance(interactionType, worldHandle.invoke(world));
+        setInteractionWidth.invoke(e, 0f);
+        setInteractionHeight.invoke(e, height);
+        var loc = viewer.getLocation();
+        setPos.invoke(e, loc.getX(), loc.getY() + viewer.getHeight(), loc.getZ());
+        return new Part(e, (Integer) getId.invoke(e));
+    }
+
+    /** New spacer height (sent with {@link #update}). */
+    static void spacerHeight(Part p, float height) throws Exception { setInteractionHeight.invoke(p.entity, height); }
 
     /** Make an item_display showing `stack` (fixed context, billboard CENTER = camera-aligned), not in the world. */
     static Part create(Player viewer, ItemStack stack, float viewRange) throws Exception {
@@ -175,7 +210,16 @@ final class NmsDisplay {
 
     /** Make the parts ride the viewer (client-side), so they follow the camera position every frame. */
     static void ride(Player viewer, List<Part> parts) throws Exception {
-        Object handle = NmsRecoil.getHandle(viewer);
+        rideOn(viewer, NmsRecoil.getHandle(viewer), parts);
+    }
+
+    /** Make the parts ride another client-side part (the spacer). */
+    static void ride(Player viewer, Part vehicle, List<Part> parts) throws Exception {
+        Object conn = NmsRecoil.connection(NmsRecoil.getHandle(viewer));
+        NmsRecoil.send(conn, PassengersPacket.make(vehicle.entity, parts));
+    }
+
+    private static void rideOn(Player viewer, Object handle, List<Part> parts) throws Exception {
         // The passengers packet reads the vehicle's passenger list; we cannot touch the real list, so write the packet by hand:
         // entity id of the vehicle + the ids. The packet class only has the (Entity) constructor, so build it through its
         // StreamCodec-free path: a FriendlyByteBuf-free constructor does not exist in 26.x, hence the small detour below.

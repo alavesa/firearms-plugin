@@ -57,6 +57,14 @@ public final class FirearmsPlugin extends JavaPlugin {
             saveConfig();
             getLogger().info("anim.mode set to display (0.27): run /firearms pack to rebuild the pack for the display rig.");
         }
+        // 0.34: the rig turns about the eye (display.rig.spacer), so it may shrink much further against walls without
+        // the picture changing. An old config still has the 0.31 value 0.4, at which a gun pressed to a wall reaches into
+        // it: lower it once (a value somebody chose themselves is left alone).
+        if (!getConfig().getBoolean("rig-034", false)) {
+            if (Math.abs(getConfig().getDouble("display.rig.scale", 0.2) - 0.4) < 1e-6) getConfig().set("display.rig.scale", 0.2);
+            getConfig().set("rig-034", true);
+            saveConfig();
+        }
         registry = new Registry(this);
         registry.load();
         flash = new Flash(this);

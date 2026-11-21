@@ -77,9 +77,8 @@ The result is capped by `anim.max-frames` (config, or per gun `anim: { max-frame
 
 ## 4. Sounds
 
-In Blockbench open the animation, add the **Effects** animator and put a **sound** keyframe where the sound should start. The keyframe stores the effect name (e.g. `m4_shot`) and the path of the .ogg on your computer; the audio itself is not inside the .bbmodel.
-
-Copy that file to the server as `plugins/Firearms/models/sounds/m4_shot.ogg` (same name as the effect, lower-case). `/firearms pack` adds it to the pack as `firearms:m4_shot` and the plugin plays it at the keyframe time whenever the clip plays. A missing file is reported as a warning.
+Sounds have their own guide now: **[SOUNDS.md](SOUNDS.md)** (where the files go, how Blockbench sound keyframes are
+matched, what changed in 0.34, how to check).
 
 **Sounds without keyframes.** Every `.ogg` you drop into `plugins/Firearms/models/sounds/` is packed by `/firearms pack` and becomes the sound id `firearms:<file name>` - nothing to edit in the pack by hand. Use those ids in guns.yml: `sound:` (the shot), `reload-sound:`, `equip-sound:`, `empty-sound:`. The pack report lists the packed names.
 
@@ -115,7 +114,7 @@ Hands with the player's skin work in grenade models exactly like in guns (see HA
 | Three magazines / two stocks drawn at once | A gun pack with attachment variants: `hide-groups:` per gun in guns.yml (the report lists the group names). |
 | Pack is huge, build takes minutes | See *Pack size and frames* below: `anim.fps.inspect`, `skip-animations`, `hide-groups`, `anim.max-frames`. |
 | Animation barely visible | Too few frames or the motion sits on a sub-group instead of the top-level gun group. |
-| No sound | File missing in `models/sounds/`, or the effect name differs from the file name. |
+| No sound | See [SOUNDS.md](SOUNDS.md) section 5. The pack report has a `!` line for every keyframe sound it could not find. |
 
 ## Third person
 

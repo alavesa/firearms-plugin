@@ -308,7 +308,9 @@ display:
   rig:
     hand: [0.56, -0.52, -0.72]   # where vanilla draws a first-person item, in view space (right, up, back) - do not touch
     offset: [0, 0, 0]            # extra view-space nudge for the whole rig (blocks): right, up, back
-    eye-offset: 0.18             # the rig rides at the player's passenger point, this much above the eyes (standing)
+    spacer: true                 # 0.34: the rig rides a client-side spacer that puts it exactly at the eye: no sway when looking
+                                 # up/down, no dip when crouching. false = the old pitch correction below (eye-offset, pitch-blend-ticks)
+    eye-offset: 0.18             # (spacer false) the rig rides at the player's passenger point, this much above the eyes (standing)
     eye-offset-sneak: 0.23       # ... and while sneaking
     aim-ticks: 4                 # ticks the client blends between the hip pose H (yours, with your /viewmodel offset) and
                                  # the aim pose A (the same for everyone: the aim clip's end + guns.yml aim-pose). Position
@@ -322,12 +324,17 @@ display:
     # the model stays within the player's own space instead of reaching into walls. 1 = the real size. A small rig sways
     # more with the camera (view bobbing while walking, looking up/down), so since 0.32 it only shrinks when a block is in
     # front: two short rays per tick pick a scale between `scale` (against a wall) and `scale-open` (nothing in reach).
-    scale: 0.4
+    scale: 0.2                   # rig size against a wall (0.34: the rig turns about the eye, so any size gives the same picture;
+                                 # 0.2 keeps a gun pressed to a block in front of it; below ~0.15 the stock is cut by the camera's
+                                 # near plane)
     scale-open: 1.0
     wall-check: true             # false = always `scale` (the 0.31 behaviour)
     reach-hip: 1.3               # how far ahead the full-size gun reaches at the hip / aiming (blocks); raise if barrels
     reach-aim: 1.9               #   still poke into walls, lower if the rig shrinks with the wall still well away
-    scale-ticks: 3               # ticks the rig takes to grow back after the wall (shrinking takes one)
+    scale-ticks: 3               # ticks the rig takes to grow back after the wall (shrinking is instant and invisible)
+    scale-hold-ticks: 10         # the wall must be out of reach this long before the rig grows back
+    scale-margin: 0.6            # blocks tested beyond the gun's reach: the rig is small before the barrel can reach a wall
+    scale-lead-ticks: 4          # the wall test runs from where a moving player will be this many ticks (plus their ping) ahead
     pitch-blend-ticks: 0         # the rig rides 0.18 above the eyes, so looking up/down needs a server correction; 0 = shown
                                  #   at once (least lag, may step at 20 Hz), 1 = blended over a tick (0.31: smoother, laggier)
     aim-straight: true           # aiming drops the model's hip cant so the barrel runs parallel to the view
