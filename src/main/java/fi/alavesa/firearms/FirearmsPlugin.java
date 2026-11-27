@@ -28,11 +28,16 @@ public final class FirearmsPlugin extends JavaPlugin {
     private HitAnimations hitAnimations;
     PackHost packHost;
     DisplayRig rig;
+    ComposableWeaponAnimator animator;
+    ModularBloodPuddleManager blood;
     Viewmodels viewmodels;
     Flash flash;
     public Viewmodels viewmodels() { return viewmodels; }
     public Flash flash() { return flash; }
     public DisplayRig rig() { return rig; }
+    public ComposableWeaponAnimator animator() { return animator; }
+    /** Blood puddles; other plugins may call blood().splash(world, from, dir, range, volume) for their own wounds. */
+    public ModularBloodPuddleManager blood() { return blood; }
     /** Guns, mags and the pack's models: Registry#modelItem("vfx/blood_splatter") gives an item showing any pack model. */
     public Registry registry() { return registry; }
     public FireController controller() { return controller; }
@@ -71,8 +76,11 @@ public final class FirearmsPlugin extends JavaPlugin {
         ballistics = new Ballistics(this, registry);
         hold = new HoldDetector(this, registry);
         casings = new Casings(this, registry);
+        animator = new ComposableWeaponAnimator(this);
         rig = new DisplayRig(this, registry);
         rig.load();
+        blood = new ModularBloodPuddleManager(this, registry);
+        blood.start();
         controller = new FireController(this, registry, ballistics, casings);
         getServer().getPluginManager().registerEvents(controller, this);
         getServer().getScheduler().runTaskTimer(this, casings::tick, 1L, 1L);
@@ -99,7 +107,9 @@ public final class FirearmsPlugin extends JavaPlugin {
         packHost.start();
         getServer().getPluginManager().registerEvents(new org.bukkit.event.Listener() {
             @org.bukkit.event.EventHandler
-            public void onQuit(org.bukkit.event.player.PlayerQuitEvent e) { hold.forget(e.getPlayer().getUniqueId()); ArmSkin.forget(e.getPlayer().getUniqueId()); }
+            public void onQuit(org.bukkit.event.player.PlayerQuitEvent e) { hold.forget(e.getPlayer().getUniqueId()); ArmSkin.forget(e.getPlayer().getUniqueId()); if (flash != null) flash.clear(e.getPlayer()); }
+            @org.bukkit.event.EventHandler
+            public void onDeath(org.bukkit.event.entity.PlayerDeathEvent e) { if (flash != null) flash.clear(e.getEntity()); }   // no blurred death screen
             @org.bukkit.event.EventHandler
             public void onJoinSkin(org.bukkit.event.player.PlayerJoinEvent e) { ArmSkin.load(FirearmsPlugin.this, e.getPlayer(), () -> controller.refreshArms(e.getPlayer())); }
         }, this);
@@ -139,6 +149,8 @@ public final class FirearmsPlugin extends JavaPlugin {
     public void onDisable() {
         if (rig != null) for (org.bukkit.entity.Player p : getServer().getOnlinePlayers()) rig.hide(p);
         if (flash != null) flash.clearAll();
+        if (blood != null) blood.clearAll();
+        if (animator != null) animator.clearAll();
         if (packHost != null) packHost.stop();
         if (controller != null) controller.shutdown();
         if (hold != null) hold.clearAll();

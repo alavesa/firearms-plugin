@@ -108,7 +108,8 @@ public final class FireController implements Listener {
                 aimSeen.put(p.getUniqueId(), plugin.getServer().getCurrentTick());
                 // right-click during an inspect: the inspect stops and the gun goes onto the sight
                 String clip = currentClip.get(p.getUniqueId());
-                if (clip != null && clip.startsWith("inspect") && !aiming.contains(p.getUniqueId())) cancelClip(p);
+                // (0.35: off by default - the inspect keeps playing while the gun glides onto the sights, the layers compose)
+                if (plugin.getConfig().getBoolean("aim.cancels-inspect", false) && clip != null && clip.startsWith("inspect") && !aiming.contains(p.getUniqueId())) cancelClip(p);
                 if (!aiming.contains(p.getUniqueId())) enterAim(p, gun, item);
             }
             return;
@@ -538,6 +539,7 @@ public final class FireController implements Listener {
         UUID id = event.getPlayer().getUniqueId();
         nextShotAt.remove(id); lastSwing.remove(id); lastShotTick.remove(id); drawUntil.remove(id); aimSeen.remove(id);
         lastSwingTick.remove(id); rhythmPrevTap.remove(id); rhythmActive.remove(id); recoilQueue.remove(id);
+        if (plugin.animator() != null) plugin.animator().forget(id);
     }
 
     // ------------------------------------------------------------------ aiming down the sight
@@ -556,6 +558,8 @@ public final class FireController implements Listener {
 
     /** Sneaking counts as aiming too (config aim.sneak-aims), as it always did. */
     public boolean isAiming(Player p) { return aiming.contains(p.getUniqueId()) || (plugin.getConfig().getBoolean("aim.sneak-aims", true) && p.isSneaking()); }
+    /** Did this player fire within the last `ticks` ticks? (The sprint carry drops the instant a shot goes off.) */
+    public boolean firedRecently(Player p, int ticks) { Long t = lastShotTick.get(p.getUniqueId()); return t != null && plugin.getServer().getCurrentTick() - t <= ticks; }
 
     private static double healthFraction(Player p) {
         var max = p.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH);
@@ -734,6 +738,8 @@ public final class FireController implements Listener {
             if (migrated != null) { registry.applySkin(migrated, g, p); inv.setItem(i, migrated); continue; }
             if (registry.applySkin(it, g, p)) inv.setItem(i, it);
         }
+        // a rig already on screen keeps clones of the stack: give its hand parts the new colours at once
+        if (plugin.rig() != null && plugin.rig().showing(p)) plugin.rig().refreshItems(p, inv.getItemInMainHand());
     }
 
     /** The gun is a charged crossbow for its pose only: it must never actually loose the bolt. */

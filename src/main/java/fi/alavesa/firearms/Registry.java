@@ -176,7 +176,8 @@ public final class Registry {
                 s.getDouble("knockback", plugin.getConfig().getDouble("knockback.default", 0.08)),
                 s.getString("fire-detect", "barrier").trim().toLowerCase(),
                 Math.max(0, s.getDouble("shake", 0)),
-                s.getConfigurationSection("aim-pose")));
+                s.getConfigurationSection("aim-pose"),
+                swaySection(s)));
         }
         // Animation frame index written by the pack generator.
         File ai = new File(new File(plugin.getDataFolder(), "models"), "anim-index.yml");
@@ -207,6 +208,18 @@ public final class Registry {
                 clipNames.put(model, names);
             }
         }
+    }
+
+    /** guns.yml sway: (this gun's sway / cant / sprint / stabilizer overrides, see config.yml sway:); a top-level
+     *  aim-transition-ticks / aim-transition-time-ms is folded into it. Null when the gun has neither. */
+    private static ConfigurationSection swaySection(ConfigurationSection s) {
+        ConfigurationSection sw = s.getConfigurationSection("sway");
+        boolean top = s.contains("aim-transition-ticks") || s.contains("aim-transition-time-ms");
+        if (sw == null && !top) return null;
+        if (sw == null) sw = s.createSection("sway");
+        if (s.contains("aim-transition-ticks") && !sw.contains("aim-transition-ticks")) sw.set("aim-transition-ticks", s.getInt("aim-transition-ticks"));
+        if (s.contains("aim-transition-time-ms") && !sw.contains("aim-transition-time-ms")) sw.set("aim-transition-time-ms", s.getDouble("aim-transition-time-ms"));
+        return sw;
     }
 
     /** Copy the named entries of a jar default file into the server's file when they are missing there. */

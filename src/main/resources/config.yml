@@ -77,15 +77,28 @@ damage:
                           # still go through the normal damage so the kill is credited). true = vanilla hurt effect.
 # Splatters and craters are item displays lit by the block they lie on (no fixed brightness since 0.27, so they are
 # dark in the dark like everything else).
+# ---- Blood: connected puddle tiles (ModularBloodPuddleManager, 0.35) ----
+# Every tile covers one block FACE, flush on the face's real collision surface (slab tops, snow layers, carpets, stair
+# steps, trapdoors, walls, ceilings). Blood adds volume to a tile; past a full tile the surplus runs into a neighbouring
+# face (down a wall, along the shot on a floor) and the tiles join up with connected textures: 1x1 is a round splatter,
+# 2x1 / 2x2 / 3x2 ... one seamless pool. 32 tile textures are generated (blood/splat_<0-15>, blood/pool_<0-15>, the
+# number = which of the 4 neighbours exist: 1 up/north, 2 right/east, 4 down/south, 8 left/west); drop your own
+# models/blood/<splat|pool>_<mask>.png to replace any of them. Breaking or covering a block removes its tiles.
 blood:
   enabled: true
-  range: 4.0             # how far behind the victim a wall can be for a splatter
-  seconds: 60            # how long a splatter stays
-  size: 0.7
-  variants: 6            # blood_1 .. blood_N textures, picked at random: your own models/blood_N.png, or one blood.png
-                         # that the pack turns, mirrors, darkens and erodes into N different stains, or generated splatters
-  extra: 2               # extra splatters around the victim per hit (floor + a random direction)
-  model: blood
+  range: 4.0             # how far behind the victim a wall can be for the spurt along the bullet
+  seconds: 90            # how long a tile stays; it dries to the thin stain at dry-at of that, then goes
+  dry-at: 0.7
+  per-hit: 0.45          # volume one bullet adds to the tile it hits (1.0 = a full tile, then it spills)
+  pool-threshold: 0.6    # volume from which a tile shows the dense pool texture instead of the thin splat
+  extra: 2               # extra spurts around the victim per hit (the floor under them + a random direction)
+  spill-depth: 3         # how many tiles a surplus may run on from the one it fell on
+  connect-step: 0.5      # tiles whose surfaces differ by more than this (blocks) are not joined (a step, not a slab edge)
+  max-cells: 600         # oldest tiles go first
+  surface-offset: 0.002  # blocks above the face the tile floats (z-fighting margin)
+  tile-scale: 1.0
+  view-range: 1.0
+
 # Hit zones: multiplier by where the bullet lands on the hitbox (height fraction). Vests do not cover the head.
 damage:
   vehicle-multiplier: 1.0  # bullets vs cars/machines (their own health; no blood, no hit zones)
@@ -116,6 +129,18 @@ hands:
   enabled: true
   group-keywords: [hand, arm]
   texture-keywords: [skin, steve, alex, player, template]
+  # 0.35: bones named left_hand / right_hand / left_arm / right_arm / l_hand / r_hand / hand_l ... are hands too, whatever
+  # the keywords say. Hands textured from the gun's own atlas (TaCZ exports) get their faces re-pointed at the skin's arm
+  # region automatically: right arm [40,16]-[56,32] (+ sleeve [40,32]-[56,48]), left arm [32,48]-[48,64] (+ sleeve
+  # [48,48]-[64,64]), slim 3 px variants for slim players; the cube's long edge is the arm, the end nearer the gun the hand.
+  auto-remap: true
+  sleeve-layer: true     # auto-remapped hands also carry the skin's second layer (sleeves) a quarter pixel out; a player
+                         # whose skin has no sleeve there sees skin (the layer takes the pixel underneath)
+  max-skin-pixels: 3000  # cap on skin-pixel quads per model from auto-remapped hands (a face gets a slice the size of the cube)
+  empty-bone-arm: off    # TaCZ exports keep EMPTY lefthand/righthand bones (the mod drew the player's arms there). "shoulder"
+                         # models a 4x12x4 skin arm hanging down the bone's local -Y from its origin, "hand" one running up +Y
+                         # from it; off = nothing (the gun shows no hands). Unverified against TaCZ's own convention: try
+                         # "shoulder" first and look at the rig.
 
 # ---- (older) generated first-person ARMS - off by default, superseded by hands in the .bbmodel ----
 # One pack for everyone: each arm is built from one tiny quad per skin pixel, each with its own tint index, and the
@@ -154,6 +179,8 @@ aim:
   hold-timeout-ticks: 7
   sound-in: minecraft:item.spyglass.use
   sound-out: minecraft:item.spyglass.stop_using
+  cancels-inspect: false   # true = right-click during an inspect stops the inspect (pre-0.35); false = the inspect keeps
+                           # playing while the gun glides onto the sights (the layers compose, see sway:)
 
 # ---- Reload ----
 # use-clip-length: the reload takes exactly as long as the reload animation that plays (so a fast "tactical" clip
@@ -341,6 +368,61 @@ display:
     debug: false                 # log the first parts' transforms when a rig is (re)sent
     static-test: false           # diagnostic: park the parts 2 blocks ahead, not riding - "do the entities show at all?"
 
+# ---- Sway: the composable animator (ComposableWeaponAnimator, 0.35) ----
+# Every tick the rig's hand transform is  stabiliser * sway/cant/sprint (about the hand point) * hip<->aim (eased) * the
+# part's own clip pose. The layers are weighted and multiplied, never switched: an inspect keeps playing while the gun
+# glides onto the sights, a crouch cant fades as you aim, the sprint carry drops the instant you fire or aim. Positions
+# are in blocks of view space (right, up, back - so a negative third value is toward the muzzle), angles in degrees
+# (X: + = muzzle up, Y: + = muzzle to the left, Z: + = the gun rolls to the left). Everything here can be overridden per
+# gun in guns.yml under  sway:  with the same keys (e.g. sway: { cant: { degrees: 35 }, aim-transition-ticks: 3 }).
+sway:
+  enabled: true
+  aim-transition-ticks: 4      # hip <-> sights, cubic ease-in-out (or aim-transition-time-ms: 200); per gun in guns.yml too
+  aim-multiplier: 0.25         # how much of the sway remains on the sights
+  blend-ticks: 3               # time constant of the walk/run weights (how fast sway builds up and dies down)
+  interpolation-ticks: 1       # client blend per sway update (1 = follows every tick; 2 = softer, half a tick behind)
+  min-step: 0.0004             # a sway step smaller than this (blocks) is not sent (idle breathing is sent every 2nd tick)
+  idle:                        # breathing while standing still
+    scale: 1.0
+    period-ticks: 64
+    amplitude: [0.0015, 0.004, 0.0]
+    pitch: 0.35
+    roll: 0.15
+  walk:                        # a figure-8: x = A cos t, y = B sin 2t, with roll on the lateral and pitch on the vertical beat
+    scale: 1.0
+    speed: 0.12                # blocks/tick at which the walk sway is full
+    amplitude: [0.012, 0.008, 0.0]
+    roll: 1.2
+    pitch: 0.8
+    phase-per-block: 1.885     # 0.6 * pi: the client's own view-bob phase, so sway and camera bob stay in step
+  run:                         # sprinting: wider, the same distance-driven phase (so faster)
+    scale: 1.0
+    speed: 0.24                # blocks/tick at which the run sway is full
+    amplitude: [0.024, 0.016, 0.006]
+    roll: 2.5
+    pitch: 1.6
+  sprint:                      # the tactical carry while sprinting (not aiming, not firing): pulled in, turned across the chest
+    enabled: true
+    ticks: 6
+    offset: [0.08, -0.10, 0.12]
+    rotation: [12, 28, 10]
+  cant:                        # crouching: the gun rolled onto its side at the hand point, shifted inward; fades out on the sights
+    enabled: true
+    degrees: 40
+    ticks: 4                   # default = the aim transition
+    offset: [-0.07, 0.02, 0.0]
+    sway-multiplier: 0.6
+  stabilizer:                  # counter view-bobbing: the client's own bob (walk distance + bob amount, the formulas of the
+    enabled: true              # 26.3 client) mirrored from the movement the server sees, predicted a ping ahead and inverted,
+    strength: 1.0              # so the gun stays still on the screen while the world bobs (0 = off, 1 = full)
+    lead-ticks: -1             # -1 = 1 + the player's ping in ticks
+    smoothing: 0.3             # 0..0.9: how much the movement sample is low-passed before it drives the estimate
+    walk-distance-factor: 0.6
+  hide-vanilla:                # VanillaSwaySuppressor: the stack in the hand never shows itself
+    first-person: true         # scale 0 on every first-person transform of the gun's own models (the rig draws the gun)
+    third-person: false        # true = scale 0 in third person as well - OTHER players then see no gun at all (the rig is
+                               # drawn only for its holder), so leave this off unless something else shows the gun to them
+
 # ---- Third person ----
 # Every gun frame carries its pose as per-part (bone) display rotations, and those exist only in the first-person
 # entries of the items file. In third person, on the ground, in item frames and in the GUI fallback the gun is its
@@ -369,12 +451,18 @@ hit-animations:
     # legs_right: hit_legs_right
 
 # ---- Flashbang (grenades.yml kind: flash) ----
-# The white screen is one glyph of the pack's firearms:flash font (a big white bitmap) shown as a TITLE; the title's
-# own fade-out fades it. No shaders. Without the pack nothing shows.
+# Two layers, both from the pack (without it nothing shows):
+#  post  - 0.35: per-player POST EFFECTS firearms:flash_1..24 (one post shader: white-out, blur, drained colour, bloom).
+#          The hit picks a level, the plugin steps it down every tick: the white goes first, the blur and the grey
+#          "ringing" linger for the tail. Runs over the world frame only (hotbar/chat stay readable). Needs 26.3 (the
+#          server's per-player post effects); older servers fall back to title. Not a core shader - cannot break the pack.
+#  title - one glyph of the firearms:flash font (a big white bitmap) as a fading TITLE: an instant hard white that
+#          covers the HUD too. The only layer before 26.3.
+#  both  - (default) title's hard white on top of the post effect's tail.
 flashbang:
-  mode: postfx           # postfx = the pack's post effects flash_1..24 (white-out, blur, drained colour, bloom; 26.3). title = the old fading white glyph
+  mode: both
   hold-ticks: 12         # solid white this long (scaled by how hard the flash hit) before the fade
-  tail: 1.0              # length of the fade after the hold, times the flash's remaining duration (the blur / grey ringing is the last part of it)
+  tail: 1.0              # post: length of the blur/grey tail as a share of the fade (1.5 = the ringing outlasts the white by half)
 
 # ---- Resource pack generator ----
 pack:

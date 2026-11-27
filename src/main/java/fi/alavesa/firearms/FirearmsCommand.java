@@ -90,6 +90,7 @@ public final class FirearmsCommand implements CommandExecutor, TabCompleter {
                     if (c != null) sender.sendMessage(line(dir, c, "casing of " + g.id() + (c.equals(g.model() + "_casing") ? " (auto-detected)" : " - or add " + g.model() + "_casing.bbmodel")));
                 }
                 sender.sendMessage(line(dir, plugin.getConfig().getString("craters.model", "crater"), "crater (or crater.png)"));
+                sender.sendMessage(Component.text("  blood: 32 connected puddle tiles are generated (blood/splat_0..15, blood/pool_0..15); your own: models/blood/<splat|pool>_<mask>.png", NamedTextColor.GRAY));
                 return true;
             }
             case "mode", "firemode" -> {

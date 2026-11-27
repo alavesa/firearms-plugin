@@ -55,6 +55,10 @@
 #                 files in plugins/Firearms/models/sounds/<effect name>.ogg - they play in sync with the clip.
 #  aim-pose       the rig's AIM state on top of the model's aim clip, the same for every player whatever their /viewmodel:
 #                   aim-pose: { offset: [right, up, forward], rotation: [x, y, z], scale: 1.0 }   (sixteenths of a block / degrees)
+#  aim-transition-ticks  how long hip <-> sights takes for THIS gun (cubic ease-in-out), or aim-transition-time-ms: 180
+#                 (default: config.yml sway.aim-transition-ticks)
+#  sway           per-gun overrides of config.yml sway: - the same keys, e.g.
+#                   sway: { cant: { degrees: 35 }, sprint: { rotation: [10, 35, 8] }, walk: { scale: 0.7 }, aim-transition-ticks: 3 }
 #                 Set it in game, live, without a pack rebuild:  /firearms pose <gun> aim offset|rotate|scale|reset ...
 #  fire-detect    barrier (default: the client-side mining barrier reads a held trigger) | rhythm (no barrier; two taps
 #                 within config hold.rhythm-window-ticks = held, keeps firing while taps keep coming) - EXPERIMENTAL

@@ -213,6 +213,8 @@ public final class Grenades implements Listener {
                 w.playSound(at, "minecraft:entity.generic.explode", 2.0f, 0.9f);
                 w.spawnParticle(Particle.EXPLOSION_EMITTER, at, 1);
                 w.spawnParticle(Particle.CLOUD, at, 40, 0.8, 0.5, 0.8, 0.1);
+                // for things that are not living (doors, props): they never get a FirearmsHitEvent
+                plugin.getServer().getPluginManager().callEvent(new fi.alavesa.firearms.api.FirearmsExplosionEvent(t.thrower, at.clone(), t.type.radius(), t.type.damage(), t.type.id()));
                 for (Entity e : w.getNearbyEntities(at, t.type.radius(), t.type.radius(), t.type.radius())) {
                     if (!(e instanceof LivingEntity le) || e.isDead()) continue;
                     double d = le.getLocation().add(0, 0.9, 0).distance(at);

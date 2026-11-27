@@ -104,7 +104,7 @@ public final class Ballistics {
         Location end = hit != null ? hit.point : eye.clone().add(dir.clone().multiply(gun.hitscanRange()));
         // The RAY starts at the eye (so it lands exactly on the crosshair); the visible tracer and the flash
         // start at the gun's muzzle in the hand (guns.yml muzzle: right,up,forward) and converge onto the ray.
-        Location muzzle = muzzle(shooter, gun, dir);
+        Location muzzle = muzzle(plugin, shooter, gun, dir);
         tracer(muzzle, end);
         flash(shooter, muzzle);
         if (hit != null) { resolve(hit, shooter, gun, hit.dist, dmgMult); return; }
@@ -164,7 +164,7 @@ public final class Ballistics {
             if (amount <= 0) return;
             if (!zone.equals("head")) amount = vestAbsorb(target, amount);   // a vest covers the body, not the head
             if (amount <= 0.001) return;
-            blood(target, hit.point, hit.dir);
+            if (!vehicleLike(target) && plugin.blood() != null) plugin.blood().bleed(target, hit.point, hit.dir);
             applyingDamage = true;
             try {
                 if (target instanceof Player victim && !plugin.getConfig().getBoolean("damage.hurt-animation", false)) {
@@ -216,37 +216,6 @@ public final class Ballistics {
         if (rest > 0) victim.setHealth(hp - rest);
         victim.getWorld().playSound(victim.getLocation(), "minecraft:entity.player.hurt", 0.8f, 1.0f);
         victim.sendActionBar(net.kyori.adventure.text.Component.text("Hit!", net.kyori.adventure.text.format.NamedTextColor.RED));
-    }
-
-    /** Blood: a burst of red particles at the wound and a splatter decal on the wall behind the target. */
-    private void blood(LivingEntity target, Location wound, Vector dir) {
-        if (!plugin.getConfig().getBoolean("blood.enabled", true) || dir == null) return;
-        if (target instanceof org.bukkit.entity.ArmorStand || vehicleLike(target)) return;   // only living flesh bleeds
-        World w = target.getWorld();
-        w.spawnParticle(Particle.BLOCK, wound, 14, 0.15, 0.2, 0.15, 0.08, Material.REDSTONE_BLOCK.createBlockData());
-        double range = plugin.getConfig().getDouble("blood.range", 4.0);
-        splat(w, wound, dir, range);
-        // extra splatters around the victim: the floor under them and a random direction, for variety
-        var rnd = ThreadLocalRandom.current();
-        int extra = plugin.getConfig().getInt("blood.extra", 2);
-        for (int i = 0; i < extra; i++) {
-            Location from = target.getLocation().add(rnd.nextDouble() * 1.2 - 0.6, 0.6 + rnd.nextDouble() * 0.8, rnd.nextDouble() * 1.2 - 0.6);
-            Vector d = i == 0 ? new Vector(rnd.nextDouble() * 0.6 - 0.3, -1, rnd.nextDouble() * 0.6 - 0.3) : new Vector(rnd.nextDouble() * 2 - 1, rnd.nextDouble() * 0.6 - 0.5, rnd.nextDouble() * 2 - 1);
-            if (d.lengthSquared() < 1e-4) continue;
-            splat(w, from, d.normalize(), i == 0 ? 2.5 : range);
-        }
-    }
-
-    /** One splatter decal on the first wall/floor along dir, with a random texture variant and size. */
-    private void splat(World w, Location from, Vector dir, double range) {
-        RayTraceResult wall = w.rayTraceBlocks(from, dir, range, FluidCollisionMode.NEVER, true);
-        if (wall == null || wall.getHitBlock() == null || wall.getHitBlockFace() == null) return;
-        if (passable(wall.getHitBlock().getType()) && ignore.contains(wall.getHitBlock().getType())) return;
-        var rnd = ThreadLocalRandom.current();
-        int variants = Math.max(1, plugin.getConfig().getInt("blood.variants", 4));
-        String model = plugin.getConfig().getString("blood.model", "blood") + "_" + (1 + rnd.nextInt(variants));
-        double sz = plugin.getConfig().getDouble("blood.size", 0.7) * (0.6 + rnd.nextDouble() * 0.8);
-        decal(wall.getHitBlock(), wall.getHitPosition().toLocation(w), wall.getHitBlockFace(), model, (float) sz, plugin.getConfig().getDouble("blood.seconds", 60));
     }
 
     /** A worn vest soaks its share of the bullet into its durability; the rest reaches the wearer. */
@@ -375,9 +344,11 @@ public final class Ballistics {
     }
 
     /** Muzzle point in the world for this shot: eye + right/up/forward offsets from the gun. */
-    public static Location muzzle(Player p, GunType gun, Vector dir) {
+    public static Location muzzle(FirearmsPlugin plugin, Player p, GunType gun, Vector dir) {
         Location eye = p.getEyeLocation();
         double[] m = gun.muzzle() == null ? new double[]{0.35, -0.22, 0.7} : gun.muzzle();
+        // the rig carries the muzzle with the gun: hip -> sights, sway, the crouch cant, the sprint carry
+        if (plugin != null && plugin.rig() != null) m = plugin.rig().muzzle(p, m);
         Vector fwd = dir.clone().normalize();
         Vector right = fwd.clone().crossProduct(new Vector(0, 1, 0));
         if (right.lengthSquared() < 1e-6) right = new Vector(1, 0, 0);
@@ -415,11 +386,12 @@ public final class Ballistics {
         double step = Math.max(0.5, plugin.getConfig().getDouble("ballistics.tracer-step", 1.5));
         Vector d = b.toVector().subtract(a.toVector());
         double len = d.length();
-        if (len < 0.01) return;
+        if (!Double.isFinite(len) || len < 0.01) return; // Infinity would make the loop below run forever
         d.normalize().multiply(step);
         Location p = a.clone();
         Particle.DustOptions dust = new Particle.DustOptions(Color.fromRGB(255, 225, 140), 0.55f);
-        for (double t = 0; t < len; t += step) {
+        int guard = 512;
+        for (double t = 0; t < len && guard-- > 0; t += step) {
             a.getWorld().spawnParticle(Particle.DUST, p, 1, 0, 0, 0, 0, dust);
             p.add(d);
         }

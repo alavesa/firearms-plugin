@@ -50,6 +50,8 @@ final class DisplayRig {
         int lastNearWall = -1000; double scaleShown = -1;
         NmsDisplay.Part spacer;                            // between the player and the parts: puts the rig origin at the eye
         float spacerHeight;                                // eye height - passenger point, sent last
+        boolean swayShown;                                 // the animator's layers were away from rest at the last send
+        int lastSendTick = -1000;
     }
 
     private final FirearmsPlugin plugin;
@@ -107,11 +109,13 @@ final class DisplayRig {
         boolean hasSlim = false; for (int v : mp.partVariant) if (v == 2) hasSlim = true;
         float range = (float) plugin.getConfig().getDouble("display.rig.view-range", 1.0);
         try {
+            ItemStack src = held.clone();
+            BBModelHandSkinCompiler.bind(plugin, registry, p, src, gun);   // the holder's live profile skin on the hand parts (variants 1/2)
             for (int i = 0; i < mp.partCmd.length; i++) {
                 int v = mp.partVariant[i];
                 boolean show = v == 0 || v == 3 || v == 4 || (v == 1 && !(slim && hasSlim)) || (v == 2 && slim && hasSlim);
                 if (!show) { a.parts.add(null); continue; }
-                ItemStack stack = held.clone();
+                ItemStack stack = src.clone();
                 stack.setAmount(1);
                 registry.setModel(stack, mp.partCmd[i]);
                 a.parts.add(NmsDisplay.create(p, stack, range));
@@ -195,16 +199,17 @@ final class DisplayRig {
             GunType heldNow = registry.gunOf(p.getInventory().getItemInMainHand());
             if (heldNow == null || !heldNow.id().equals(a.gun.id())) { hide(p); continue; }   // by id: a registry reload makes new GunType objects
             int duration = 1;
-            // H <-> A, stepped here one tick at a time (0.33): every part gets the SAME hand transform for the step, so the
-            // gun moves as one body. Before, the client blended each part on its own over aim-ticks (position along a
-            // straight line, rotation as a quaternion), so parts away from the pivot cut the corner and the gun came apart
-            // mid-swing; and any pitch update during the blend snapped it to the end.
-            double targetT = a.aiming ? 1 : 0;
-            boolean stepping = a.aimT != targetT;
-            if (stepping) {
-                double step = 1.0 / aimTicks();
-                a.aimT = targetT > a.aimT ? Math.min(targetT, a.aimT + step) : Math.max(targetT, a.aimT - step);
-            }
+            // H <-> A is stepped here one tick at a time (0.33): every part gets the SAME hand transform for the step, so the
+            // gun moves as one body (the client blending each part on its own tore the gun apart mid-swing). Since 0.35 the
+            // step comes from the animator: a cubic ease over the gun's own transition time, composed with the crouch cant,
+            // the sprint carry, the walk/run sway and the view-bob counter - all at once, never one instead of another.
+            ComposableWeaponAnimator.State st = animator().state(p);
+            FireController fc = plugin.controller();
+            animator().tick(p, a.gun, st, new ComposableWeaponAnimator.Inputs(a.aiming, p.isSneaking(), p.isSprinting(),
+                fc != null && fc.firedRecently(p, 10), a.clip != null && a.clip.startsWith("fire"), p.getPing()));
+            double newT = animator().aimT(st);
+            boolean stepping = Math.abs(newT - a.aimT) > 1e-9;
+            a.aimT = newT;
             if (a.clip != null) {
                 List<float[][]> frames = a.poses.clips.get(a.clip);
                 int idx = (int) Math.floor((now - a.startTick) / a.stretch);
@@ -251,13 +256,25 @@ final class DisplayRig {
                     try { NmsDisplay.spacerHeight(a.spacer, h); NmsDisplay.update(p, a.spacer); } catch (Exception ex) { plugin.getLogger().warning("Display rig spacer update failed: " + ex); }
                 }
             }
-            send(p, a, duration, switchAim);
+            // the sway layers move every tick while the player walks or breathes: send with a short blend and skip steps too
+            // small to see; once they settle, one last send puts the gun back exactly at rest
+            boolean swaying = !animator().resting(st);
+            double tol = 1e-4;
+            if (swaying || a.swayShown) {
+                if (duration == 0 && !switchAim) {
+                    duration = Math.max(1, Math.min(4, plugin.getConfig().getInt("sway.interpolation-ticks", 1)));
+                    tol = Math.max(1e-5, plugin.getConfig().getDouble("sway.min-step", 4e-4));
+                }
+                a.swayShown = swaying;
+            }
+            send(p, a, duration, switchAim, tol);
         }
     }
 
     /** Send the current pose: every part whose transform changed (or all when `all`). duration 0 = only things that
      *  moved because the camera pitch changed, sent without blending. */
-    private void send(Player p, Active a, int duration, boolean all) {
+    private void send(Player p, Active a, int duration, boolean all) { send(p, a, duration, all, 1e-4); }
+    private void send(Player p, Active a, int duration, boolean all, double tol) {
         double pitch = p.getLocation().getPitch();
         boolean sneak = p.isSneaking();
         if (a.lastPitch == -1e9) return;   // debug tests: frozen
@@ -269,7 +286,11 @@ final class DisplayRig {
         // H = the gun's hip pose + this player's /viewmodel offset; A = the fixed aim pose for everyone (guns.yml aim-pose,
         // on top of the aim clip's end pose), with no player offset, so a customised H never moves the shared sight line
         Viewmodels.Setting vm = plugin.viewmodels() != null ? plugin.viewmodels().of(p) : new Viewmodels.Setting();
-        double[][] hand = handChain(a.poses, vm, a.aimT, a.gun.aimPose());
+        double[] pivot = new double[3];
+        double[][] hand = handChain(a.poses, vm, a.aimT, a.gun.aimPose(), pivot);
+        // the animator's layers in front: sway, crouch cant and sprint carry about the hand point, the view-bob counter about the camera
+        ComposableWeaponAnimator.State st = animator().peek(p.getUniqueId());
+        if (st != null && animator().enabled()) hand = mul(fromJoml(animator().layer(st, new org.joml.Vector3f((float) pivot[0], (float) pivot[1], (float) pivot[2]), true)), hand);
         List<Object> packets = new ArrayList<>();
         for (int i = 0; i < a.parts.size(); i++) {
             NmsDisplay.Part part = a.parts.get(i);
@@ -278,7 +299,7 @@ final class DisplayRig {
             double[][] tf;
             if (m == null) tf = hiddenTransform();
             else tf = transformFor(a.poses, i, m, hand, offC, a.scale < 0 ? scaleMin() : a.scale);
-            if (!all && same(tf, a.lastSent[i])) continue;
+            if (!all && same(tf, a.lastSent[i], tol)) continue;
             a.lastSent[i] = tf;
             if (all && i < 6 && plugin.getConfig().getBoolean("display.rig.debug", false))
                 plugin.getLogger().info(String.format("rig part %d (%s, variant %d): %s translation [%.3f %.3f %.3f] scale [%.3f %.3f %.3f] pitch %.1f offC y %.3f z %.3f", i, a.poses.partCmd[i], a.poses.partVariant[i], m == null ? "HIDDEN" : "", tf[0][3], tf[1][3], tf[2][3],
@@ -288,6 +309,7 @@ final class DisplayRig {
         }
         // one bundle: the client applies every part's new transform in the same tick (single packets could straddle a
         // client tick and show half the gun a tick behind the other half)
+        if (!packets.isEmpty()) a.lastSendTick = plugin.getServer().getCurrentTick();
         try { NmsDisplay.sendAll(p, packets); } catch (Exception e) { plugin.getLogger().warning("Display rig update failed: " + e); }
     }
 
@@ -336,7 +358,7 @@ final class DisplayRig {
     // ---------------------------------------------------------------- the maths
 
     /** T(hand) T(tr/16) R(rot) S(sc) T(-0.5): the gun's own first-person transform, then vanilla's hand placement. */
-    private double[][] handChain(ModelPoses mp, Viewmodels.Setting vm, double t, org.bukkit.configuration.ConfigurationSection aimPose) {
+    private double[][] handChain(ModelPoses mp, Viewmodels.Setting vm, double t, org.bukkit.configuration.ConfigurationSection aimPose, double[] pivotOut) {
         // hip (t 0): vanilla's hand point (0.56 right, 0.52 down, 0.72 ahead) + the player's /viewmodel offset; aim (t 1): the
         // gun centred under the eye line (display.rig.aim-hand), on top of which the model's aim clip (if any) and the gun's
         // aim-pose adjust apply. In between every term moves by t, so all parts share one rigid transform per step.
@@ -351,6 +373,7 @@ final class DisplayRig {
         // the gun keeps its screen size and spot: aim-hand is given in un-zoomed view units.
         double zoomComp = 1.0 + (2.0 / (1.0 + Math.max(0.05, plugin.getConfig().getDouble("aim.speed-multiplier", 0.35))) - 1.0) * t;
         double[][] tm = translate((h[0] + extra[0] + u * vm.x / 16.0) * zoomComp, (h[1] + extra[1] + u * vm.y / 16.0) * zoomComp, (h[2] + extra[2] - u * vm.z / 16.0) * zoomComp);
+        if (pivotOut != null) { pivotOut[0] = tm[0][3]; pivotOut[1] = tm[1][3]; pivotOut[2] = tm[2][3]; }   // the hand point: where the sway layers turn the gun
         if (aiming && aimPose != null) {
             // the gun's aim-state adjust (guns.yml aim-pose / `/firearms pose <gun> aim ...`): offset in sixteenths of a block
             // (right, up, forward), rotation in degrees and a scale, applied about the hand point in view space
@@ -404,11 +427,54 @@ final class DisplayRig {
         }
         return Math.max(lo, Math.min(hi, rs));
     }
-    private int aimTicks() { return Math.max(1, plugin.getConfig().getInt("display.rig.aim-ticks", 4)); }
     private static double[] vec3(org.bukkit.configuration.ConfigurationSection c, String key, double[] def) {
         List<Double> l = c.getDoubleList(key);
         return l.size() == 3 ? new double[]{l.get(0), l.get(1), l.get(2)} : def;
     }
+    private ComposableWeaponAnimator animator() { return plugin.animator(); }
+
+    /** A joml matrix as the row-major double[4][4] the rest of the rig computes with. */
+    static double[][] fromJoml(org.joml.Matrix4f m) {
+        double[][] r = new double[4][4];
+        for (int row = 0; row < 4; row++) for (int col = 0; col < 4; col++) r[row][col] = m.get(col, row);
+        return r;
+    }
+
+    /** The gun's muzzle (right, up, forward from the eye, in blocks) carried by the rig's pose of the moment: the hip -> sights
+     *  move, the sway, the crouch cant and the sprint carry. Unchanged for a player without a rig. */
+    double[] muzzle(Player p, double[] ruf) {
+        Active a = active.get(p.getUniqueId());
+        if (a == null || ruf == null || ruf.length < 3) return ruf;
+        double t = a.aimT;
+        double[] hh = list3("display.rig.hand", new double[]{0.56, -0.52, -0.72}), ha = list3("display.rig.aim-hand", new double[]{0.06, -0.235, -1.1});
+        double zoomComp = 1.0 + (2.0 / (1.0 + Math.max(0.05, plugin.getConfig().getDouble("aim.speed-multiplier", 0.35))) - 1.0) * t;
+        double[] h = { (hh[0] + (ha[0] - hh[0]) * t) * zoomComp, (hh[1] + (ha[1] - hh[1]) * t) * zoomComp, (hh[2] + (ha[2] - hh[2]) * t) * zoomComp };
+        // view space: +X right, +Y up, +Z toward the camera; the muzzle rides with the hand point
+        org.joml.Vector3f m = new org.joml.Vector3f((float) (ruf[0] + h[0] - hh[0]), (float) (ruf[1] + h[1] - hh[1]), (float) (-ruf[2] + h[2] - hh[2]));
+        org.joml.Vector3f c = animator().carry(animator().peek(p.getUniqueId()), new org.joml.Vector3f((float) h[0], (float) h[1], (float) h[2]), m);
+        return new double[]{c.x, c.y, -c.z};
+    }
+
+    /** The holder's skin arrived or changed: the hand parts (variants 1/2) get a fresh copy of the held gun's colours. */
+    void refreshItems(Player p, ItemStack held) {
+        Active a = active.get(p.getUniqueId());
+        if (a == null || held == null) return;
+        try {
+            List<Object> packets = new ArrayList<>();
+            for (int i = 0; i < a.parts.size(); i++) {
+                NmsDisplay.Part part = a.parts.get(i);
+                int v = a.poses.partVariant[i];
+                if (part == null || (v != 1 && v != 2)) continue;
+                ItemStack stack = held.clone(); stack.setAmount(1);
+                registry.setModel(stack, a.poses.partCmd[i]);
+                NmsDisplay.item(part, stack);
+                Object pk = NmsDisplay.updatePacket(part);
+                if (pk != null) packets.add(pk);
+            }
+            NmsDisplay.sendAll(p, packets);
+        } catch (Exception e) { plugin.getLogger().warning("Display rig hand refresh failed: " + e); }
+    }
+
     /** Re-send every rig (after an aim-pose edit). */
     void refreshAll() { for (Player p : plugin.getServer().getOnlinePlayers()) refresh(p); }
 
@@ -445,9 +511,9 @@ final class DisplayRig {
         return new double[][]{{0}, {y}, {z}};
     }
 
-    private static boolean same(double[][] a, double[][] b) {
+    private static boolean same(double[][] a, double[][] b, double tol) {
         if (b == null) return false;
-        for (int i = 0; i < 3; i++) for (int j = 0; j < 4; j++) if (Math.abs(a[i][j] - b[i][j]) > 1e-4) return false;
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 4; j++) if (Math.abs(a[i][j] - b[i][j]) > tol) return false;
         return true;
     }
     private double[] list3(String key, double[] def) {

@@ -110,6 +110,11 @@ public final class ArmSkin {
         for (int[] uv : order) {
             int u = Math.max(0, Math.min(63, uv[0])), v = Math.max(0, Math.min(63, uv[1]));
             int argb = px[v * 64 + u];
+            if (((argb >>> 24) & 255) < 16) {
+                // a transparent sleeve pixel shows the arm under it: auto-remapped hands carry a quad for every sleeve pixel
+                int[] base = BBModelHandSkinCompiler.sleeveBase(u, v);
+                if (base != null) argb = px[base[1] * 64 + base[0]];
+            }
             out.add(((argb >>> 24) & 255) < 16 ? Color.fromRGB(0xC58C5E) : Color.fromRGB((argb >> 16) & 255, (argb >> 8) & 255, argb & 255));
         }
         return out;

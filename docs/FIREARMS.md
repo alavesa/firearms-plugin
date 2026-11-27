@@ -76,12 +76,25 @@ the aim (the clip plays, the gun snaps back onto the sight); a reload started fr
 until it is done. The whole rig is drawn shrunk toward the eye (`display.rig.scale`, 0.4): same picture, but the
 model stays within the player's own space instead of reaching into the wall in front (0.31).
 
-## Flashbang (0.27, no shaders since 0.28)
+## Flashbang (0.27; post effects since 0.35)
 
 `grenades.yml kind: flash`: everyone within `radius` with a line of sight gets a white screen, strongest near and
 facing it, fading over `duration` seconds (scaled by how hard it hit; nothing through a wall; a turned back takes a
-third). The white is one glyph of the pack's `firearms:flash` font - a 1024x512 white bitmap the client draws 4x as
-a title, so it covers any screen - and the title's own fade-out does the fading (config `flashbang.hold-ticks`).
+third). Two layers, `flashbang.mode` in config.yml:
+
+- `post` (0.35, Paper 26.3): the pack carries 24 **post effects** `firearms:flash_1..24` and one post shader
+  (`assets/firearms/shaders/post/flashbang.fsh`: white-out, a 13-tap blur, drained colour and a soft bloom). A hit
+  picks the level of its strength and the plugin steps the player's effect down tick by tick (`/posteffect`-style
+  per-player effects, only our own ids are added and removed, so night vision from other plugins stays). The white
+  goes first, the blur and the grey "ringing" last for the tail (`flashbang.tail`). A post effect runs over the world
+  frame: the hotbar and chat stay readable, and the gun on the display rig is washed out with the world. It is a
+  **post** shader, not a core shader - a mistake in it cannot make the client drop the pack.
+- `title`: one glyph of the pack's `firearms:flash` font - a 1024x512 white bitmap the client draws 4x as a title, so
+  it covers any screen including the HUD - and the title's own fade-out does the fading (`flashbang.hold-ticks`). The
+  only layer on a server without per-player post effects.
+- `both` (default): the title's hard white on top of the post effect's tail.
+
+Test on one player from the console: `/firearms flash <player> [intensity 0-1] [seconds]`.
 
 ## The experimental gun (0.27)
 
@@ -204,8 +217,15 @@ the thing to send along with the model file.
   the blocks listed under `ballistics.pass-through` is penetrated with reduced damage.
 - Hit zones: head, body and legs multipliers (`damage.zones`); vests (leather chestplates) absorb a share of body
   hits and carry their own durability.
-- Blood decals land on walls behind a victim; craters on blocks; shell casings fall with gravity and settle on the
-  real surface of slabs, carpets and stairs.
+- Blood (0.35) is a grid of connected puddle tiles: every tile covers one block face, flush on the face's real collision
+  surface (slab tops, snow layers, carpets, stair steps, trapdoors, walls and ceilings). A hit adds volume to the tile
+  behind the victim, one under them and one at random; a full tile spills into a neighbouring face (down a wall, along
+  the shot on a floor) and the tiles join with connected textures - a lone tile is a round splatter, 2x1 / 2x2 / 3x2 ...
+  one seamless pool that dries and fades after `blood.seconds`. Breaking or covering a block removes its tiles. The 32
+  tile textures (`blood/splat_<mask>`, `blood/pool_<mask>`, mask = which of the four neighbours exist: 1 up/north, 2
+  right/east, 4 down/south, 8 left/west) are generated; drop `models/blood/<splat|pool>_<mask>.png` to replace any.
+  Other plugins: `plugin.blood().splash(world, from, dir, range, volume)`.
+- Craters on blocks; shell casings fall with gravity and settle on the real surface of slabs, carpets and stairs.
 - Grenades: frag, incendiary and smoke, thrown with left-click after an unpin animation.
 - With RP Engine, a shot player plays a flinch emote chosen by hit zone and side (`hit-animations`).
 
@@ -221,8 +241,12 @@ the thing to send along with the model file.
 | guns invisible in first person (0.27-0.29) | three stacked bugs, fixed in 0.30 and verified on a real client: the pack's `pack.mcmeta` format was rejected by 26.3, rig parts were spawned at 0,0,0, and the display frame was mirrored; see docs/VIEWMODEL.md |
 | `/viewmodel` changed nothing | `/firearms rig` with the gun in hand says which link is missing; docs/VIEWMODEL.md explains why it has to be entities, not items. Before 0.27 the default was frames and the rig failed to start on 26.3; in 0.27 the pack's core shader made clients reject the whole pack. 0.28: no shaders, `anim.mode: display`, `/firearms pack` |
 | the pack fails to apply on the client (0.27) | the core shader in the pack; removed in 0.28, rebuild with `/firearms pack` |
+| the flashbang is only a flat white, no blur / grey tail | the player's client has the pack but the server is older than 26.3 (console warning "no per-player post effects") or `flashbang.mode: title`; 0.35 default `both` shows the post effect's tail on 26.3. The client log says "Failed to load" a post effect when the pack is missing: rebuild with `/firearms pack` |
 | casings, splatters or holes glow at night | all decal and casing displays take the light of their block since 0.29 (casings) / 0.27 (decals); no fixed brightness anywhere |
-| animated blood / bullet holes | a texture that is a vertical strip of square frames gets a `.png.mcmeta` automatically (frame time and interpolation from Blockbench's texture settings), or put `blood_1.png.mcmeta` next to `blood_1.png` in `models/` and it is copied as is |
+| animated blood / bullet holes | a texture that is a vertical strip of square frames gets a `.png.mcmeta` automatically (frame time and interpolation from Blockbench's texture settings), or put `pool_15.png.mcmeta` next to `models/blood/pool_15.png` (or `crater.png.mcmeta` next to `crater.png`) and it is copied as is |
+| the gun bobs / sways while walking, dips when crouching | 0.35: the rig composes its own sway (config `sway:`): a counter view-bob keeps the gun still on the screen while the world bobs, a figure-8 walk/run sway, idle breathing, a crouch side-cant and a sprint carry are layered on top, all blending, none replacing another. `sway.stabilizer.strength: 0` turns the counter-bob off, `sway.enabled: false` all of it |
+| aiming cancels the inspect | not since 0.35: the inspect keeps playing while the gun glides onto the sights (`aim.cancels-inspect: true` for the old behaviour); the hip-to-sights time is `aim-transition-ticks` per gun |
+| other players see no gun in my hands | `sway.hide-vanilla.third-person` is true: the rig is drawn only for its holder, so leave that off |
 | recoil feels like a jolt | `recoil.kick-ticks` (8 = smooth; 3 = the old kick), `recoil.recovery` and `recovery-ticks` - the kick is an eased camera movement, rotation packets only |
 | the gun is not affected by night vision / a post effect | the vanilla held item is drawn after the post effects since 26.3; a gun on the display rig (default since 0.27) is a world entity and gets them |
 | blood splatters / craters glow in the dark | until 0.27 decals had a fixed brightness; now they take the light of the block they lie on. Not a texture setting: `ambientocclusion` only affects block models |

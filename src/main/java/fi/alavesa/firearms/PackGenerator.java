@@ -124,8 +124,7 @@ public final class PackGenerator {
         for (MagType m : registry.mags()) model(dir, m.model(), "mag", done);
         for (AmmoType a : registry.ammos()) model(dir, a.model(), "ammo", done);
         model(dir, plugin.getConfig().getString("craters.model", "crater"), "crater", done);
-        int bloodVariants = Math.max(1, plugin.getConfig().getInt("blood.variants", 4));
-        for (int i = 1; i <= bloodVariants; i++) model(dir, plugin.getConfig().getString("blood.model", "blood") + "_" + i, "blood", done);
+        bloodTiles(dir, done);
         for (GrenadeType gt : registry.grenades()) model(dir, gt.model(), "grenade", done);
         Set<String> casingModels = new LinkedHashSet<>();
         for (GunType g : registry.guns()) { String c = registry.casingModel(g); if (c != null) casingModels.add(c); }
@@ -635,6 +634,46 @@ public final class PackGenerator {
         return out.toByteArray();
     }
 
+    /** The 32 connected-texture blood tiles of {@link ModularBloodPuddleManager}: blood/<splat|pool>_<mask 0..15>, each a
+     *  flat two-sided quad (one block when shown at scale 1) with a generated texture, or your own models/blood/<stage>_<mask>.png. */
+    private void bloodTiles(File dir, Set<String> done) throws IOException {
+        File custom = new File(dir, "blood");
+        int own = 0;
+        for (boolean pool : new boolean[]{false, true}) for (int mask = 0; mask < 16; mask++) {
+            String name = ModularBloodPuddleManager.modelName(pool, mask);
+            if (!done.add(name)) continue;
+            File png = new File(custom, (pool ? "pool" : "splat") + "_" + mask + ".png");
+            byte[] data = png.isFile() ? Files.readAllBytes(png.toPath()) : ModularBloodPuddleManager.tilePng(mask, pool, 7 + mask * 2L + (pool ? 1 : 0));
+            if (png.isFile()) own++;
+            String texPath = "assets/" + NS + "/textures/item/" + path(name) + ".png";
+            files.put(texPath, data);
+            animatedTexture(png, data, texPath, null);
+            JsonObject model = new JsonObject();
+            JsonObject tex = new JsonObject();
+            tex.addProperty("0", NS + ":item/" + path(name));
+            tex.addProperty("particle", NS + ":item/" + path(name));
+            model.add("textures", tex);
+            JsonArray elements = new JsonArray();
+            JsonObject e = new JsonObject();
+            e.add("from", arr(0, 0, 7.99));
+            e.add("to", arr(16, 16, 8.01));
+            JsonObject faces = new JsonObject();
+            // the item display renderer turns the item 180 degrees about Y: the NORTH face is the one seen from outside the block
+            JsonObject north = new JsonObject(); north.add("uv", arr(0, 0, 16, 16)); north.addProperty("texture", "#0"); faces.add("north", north);
+            JsonObject south = new JsonObject(); south.add("uv", arr(16, 0, 0, 16)); south.addProperty("texture", "#0"); faces.add("south", south);
+            e.add("faces", faces);
+            elements.add(e);
+            model.add("elements", elements);
+            JsonObject disp = new JsonObject();
+            disp.add("fixed", transform(new double[]{0, 0, 0}, new double[]{0, 0, 0}, new double[]{1, 1, 1}));
+            model.add("display", disp);
+            put("assets/" + NS + "/models/item/" + path(name) + ".json", GSON.toJson(model));
+            cmdToModel.put(name, path(name));
+            cmdKind.put(name, "blood");
+        }
+        report.add("blood: 32 connected puddle tiles (blood/splat_0..15, blood/pool_0..15)" + (own > 0 ? ", " + own + " of them your own models/blood/*.png" : " - drop models/blood/<splat|pool>_<mask>.png to replace any"));
+    }
+
     private void model(File dir, String name, String kind, Set<String> done) throws IOException {
         if (name == null || name.isEmpty() || !done.add(name)) return;
         Set<String> before = new java.util.HashSet<>(cmdToModel.keySet());
@@ -771,20 +810,6 @@ public final class PackGenerator {
                 byte[] png = custom.exists() ? Files.readAllBytes(custom.toPath()) : craterPng();
                 files.put("assets/" + NS + "/textures/item/" + path(name) + ".png", png);
                 animatedTexture(custom, png, "assets/" + NS + "/textures/item/" + path(name) + ".png", null);
-                tex.addProperty("0", NS + ":item/" + path(name));
-                tex.addProperty("particle", NS + ":item/" + path(name));
-                elements.add(cube(new double[]{0, 0, 7.9}, new double[]{16, 16, 8.1}, "#0", new double[]{0, 0, 16, 16}, null));
-            }
-            case "blood" -> {
-                File custom = new File(dir, name + ".png");                                   // blood_1.png ...
-                File shared = new File(dir, name.replaceAll("_\\d+$", "") + ".png");         // or one blood.png for all
-                int variantNo = 1;
-                try { variantNo = Integer.parseInt(name.replaceAll(".*_(\\d+)$", "$1")); } catch (NumberFormatException ignored) { }
-                // blood_N.png = your own; one shared blood.png = turned/mirrored/darkened/eroded per variant so the
-                // stains differ in shape and tone, not only in size; nothing = a generated splatter per variant
-                byte[] png = custom.exists() ? Files.readAllBytes(custom.toPath()) : shared.exists() ? variantPng(Files.readAllBytes(shared.toPath()), variantNo) : bloodPng(name.hashCode() * 31 + variantNo);
-                files.put("assets/" + NS + "/textures/item/" + path(name) + ".png", png);
-                animatedTexture(custom.exists() ? custom : shared, png, "assets/" + NS + "/textures/item/" + path(name) + ".png", null);
                 tex.addProperty("0", NS + ":item/" + path(name));
                 tex.addProperty("particle", NS + ":item/" + path(name));
                 elements.add(cube(new double[]{0, 0, 7.9}, new double[]{16, 16, 8.1}, "#0", new double[]{0, 0, 16, 16}, null));
@@ -1014,52 +1039,6 @@ public final class PackGenerator {
     }
 
     /** A splatter: a few dark-red blobs with drips, transparent elsewhere. */
-    private static byte[] bloodPng(int seed) throws IOException {
-        BufferedImage img = new BufferedImage(32, 32, BufferedImage.TYPE_INT_ARGB);
-        java.util.Random r = new java.util.Random(seed);
-        double[][] blobs = new double[6 + r.nextInt(6)][];
-        for (int i = 0; i < blobs.length; i++) blobs[i] = new double[]{ 10 + r.nextDouble() * 12, 8 + r.nextDouble() * 14, 2 + r.nextDouble() * 5 };
-        for (int y = 0; y < 32; y++) for (int x = 0; x < 32; x++) {
-            double best = 0;
-            for (double[] b : blobs) { double d = Math.hypot(x - b[0], y - b[1]) / b[2]; best = Math.max(best, 1 - d); }
-            for (int i = 0; i < 4; i++) { double bx = 12 + i * 3.5, top = 14 + i * 2; if (Math.abs(x - bx) < 0.8 && y > top && y < top + 6 + i * 3) best = Math.max(best, 0.6); }   // drips
-            if (best <= 0.05) continue;
-            int a = (int) (255 * Math.min(1, best * 1.4));
-            int red = 120 + (int) (60 * best);
-            img.setRGB(x, y, (a << 24) | (red << 16) | (12 << 8) | 14);
-        }
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        ImageIO.write(img, "png", out);
-        return out.toByteArray();
-    }
-
-    /** Variant k of a stain texture: rotated by 90 deg steps, mirrored for k > 4, a little darker and with random
-     *  pixels eroded at the edges, so one blood.png gives a whole family of different-looking stains. */
-    static byte[] variantPng(byte[] source, int k) throws IOException {
-        BufferedImage src = ImageIO.read(new java.io.ByteArrayInputStream(source));
-        if (src == null || k <= 1) return source;
-        int w = src.getWidth(), h = src.getHeight();
-        int rot = (k - 1) % 4; boolean mirror = ((k - 1) / 4) % 2 == 1;
-        BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
-        java.util.Random r = new java.util.Random(k * 7919L);
-        double tone = 1.0 - 0.08 * ((k - 1) % 5);
-        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
-            int sx = x, sy = y;
-            if (mirror) sx = w - 1 - sx;
-            for (int i = 0; i < rot; i++) { int t = sx; sx = w - 1 - sy; sy = t; }
-            int argb = src.getRGB(Math.max(0, Math.min(w - 1, sx)), Math.max(0, Math.min(h - 1, sy)));
-            int a = (argb >>> 24);
-            if (a == 0) continue;
-            // erode: edge pixels (weak alpha) drop out at random, varying the outline
-            if (a < 200 && r.nextDouble() < 0.35) continue;
-            int red = (int) (((argb >> 16) & 255) * tone), g = (int) (((argb >> 8) & 255) * tone), b = (int) ((argb & 255) * tone);
-            out.setRGB(x, y, (a << 24) | (red << 16) | (g << 8) | b);
-        }
-        ByteArrayOutputStream bo = new ByteArrayOutputStream();
-        ImageIO.write(out, "png", bo);
-        return bo.toByteArray();
-    }
-
     private static byte[] craterPng() throws IOException {
         BufferedImage img = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
         for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) {
@@ -1351,17 +1330,86 @@ public final class PackGenerator {
         Map<String, Cube> plainCubes = new LinkedHashMap<>(), classicCubes = new LinkedHashMap<>(), slimCubes = new LinkedHashMap<>();
         List<int[]> orderC = new ArrayList<>(), orderS = new ArrayList<>();
         boolean hasHands = false, hasSlim = false;
+        int remapped = 0, sleeves = 0, remapCapped = 0;
         if (plugin.getConfig().getBoolean("hands.enabled", true)) {
+            boolean autoRemap = plugin.getConfig().getBoolean("hands.auto-remap", true), sleeveLayer = plugin.getConfig().getBoolean("hands.sleeve-layer", true);
+            // the gun's centre (hand cubes left out): the end of an arm nearer to it is the hand end (BBModelHandSkinCompiler.orient)
+            double[] gunCentre = null; int gunCubes = 0;
             for (Cube c : cubes.values()) {
-                boolean hand = containsAny(c.name, handWords), slim = c.name.toLowerCase(Locale.ROOT).contains("slim");
-                for (Bone w = c.bone; w != null; w = w.parent) { if (containsAny(w.name, handWords)) hand = true; if (w.name.toLowerCase(Locale.ROOT).contains("slim")) slim = true; }
+                boolean hand = BBModelHandSkinCompiler.isHandBoneName(c.name, handWords);
+                for (Bone w = c.bone; w != null && !hand; w = w.parent) hand = BBModelHandSkinCompiler.isHandBoneName(w.name, handWords);
+                if (hand) continue;
+                if (gunCentre == null) gunCentre = new double[3];
+                for (int i = 0; i < 3; i++) gunCentre[i] += (c.from[i] + c.to[i]) / 2;
+                gunCubes++;
+            }
+            if (gunCentre != null) for (int i = 0; i < 3; i++) gunCentre[i] /= gunCubes;
+            int templateIdx = -1;   // a virtual 64x64 skin template for hands textured from the gun's own atlas
+            // TaCZ-style EMPTY hand bones (lefthand / righthand hold no cubes: the mod drew the player's arm there): opt-in,
+            // a 4x12x4 arm box is modelled at the bone - its origin is the shoulder pivot and the arm hangs along the bone's
+            // local -Y (hands.empty-bone-arm: shoulder), or the origin is the hand and the arm runs up local +Y (hand)
+            String emptyMode = plugin.getConfig().getString("hands.empty-bone-arm", "off").toLowerCase(Locale.ROOT);
+            if (autoRemap && !emptyMode.equals("off") && !emptyMode.equals("false")) {
+                int made = 0;
+                for (Bone b : new ArrayList<>(bones.values())) {
+                    if (!BBModelHandSkinCompiler.isHandBoneName(b.name, handWords) || countCubes(b) > 0) continue;
+                    boolean under = false; for (Bone w = b.parent; w != null; w = w.parent) if (BBModelHandSkinCompiler.isHandBoneName(w.name, handWords)) under = true;
+                    if (under) continue;
+                    Cube arm = new Cube();
+                    arm.uuid = "__arm_" + b.uuid; arm.name = b.name + "_arm"; arm.bone = b; arm.origin = b.origin.clone();
+                    double[] o = b.origin; boolean hand = emptyMode.startsWith("hand");
+                    arm.from = new double[]{o[0] - 2, hand ? o[1] : o[1] - 12, o[2] - 2};
+                    arm.to = new double[]{o[0] + 2, hand ? o[1] + 12 : o[1], o[2] + 2};
+                    arm.faces = new JsonObject();
+                    for (String f : FACE) { JsonObject face = new JsonObject(); face.add("uv", arr(0, 0, 4, 4)); face.addProperty("texture", "#0"); arm.faces.add(f, face); }
+                    cubes.put(arm.uuid, arm); b.elements.add(arm.uuid);
+                    made++;
+                }
+                if (made > 0) report.add(name + ": " + made + " arm box(es) modelled at empty hand bone(s) (hands.empty-bone-arm: " + emptyMode + ")");
+            }
+            for (Cube c : new ArrayList<>(cubes.values())) {
+                List<String> chain = new ArrayList<>(); chain.add(c.name);
+                for (Bone w = c.bone; w != null; w = w.parent) chain.add(w.name);
+                boolean handLoose = false, handBone = false, slim = false;
+                for (String nm : chain) {
+                    if (BBModelHandSkinCompiler.isHandName(nm, handWords)) handLoose = true;      // "hand"/"arm" anywhere in a name (the old rule, with a skin texture)
+                    if (BBModelHandSkinCompiler.isHandBoneName(nm, handWords)) handBone = true;   // a bone that IS a hand ("left_hand", not "gun_and_righthand")
+                    if (nm != null && nm.toLowerCase(Locale.ROOT).contains("slim")) slim = true;
+                }
                 boolean usesSkin = false;
                 for (String f : FACE) if (c.faces.has(f)) { Integer idx = texIdx(c.faces.getAsJsonObject(f), texIndex); if (idx != null && idx < texSkin.size() && texSkin.get(idx)) usesSkin = true; }
-                if (!hand || !usesSkin) { plainCubes.put(c.uuid, c); classicCubes.put(c.uuid, c); slimCubes.put(c.uuid, c); continue; }
+                boolean hand = usesSkin ? (handLoose || handBone) : (handBone && autoRemap);
+                int maxPixels = plugin.getConfig().getInt("hands.max-skin-pixels", 3000);
+                if (hand && !usesSkin && orderC.size() + orderS.size() >= maxPixels) {
+                    if (remapCapped++ == 0) warnings.add(name + ": hands.max-skin-pixels (" + maxPixels + ") reached - further hand cubes keep their own texture (model the hands as single arm boxes, or raise the limit)");
+                    hand = false;
+                }
+                if (!hand) { plainCubes.put(c.uuid, c); classicCubes.put(c.uuid, c); slimCubes.put(c.uuid, c); continue; }
+                Cube sleeve = null;
+                if (!usesSkin) {
+                    // hands painted from the gun's atlas (TaCZ exports...): re-point every face at the arm region of a 64x64 skin
+                    if (templateIdx < 0) { templateIdx = texImg.size(); texImg.add(BBModelHandSkinCompiler.template()); texSkin.add(true); texRes.add(new double[]{64, 64}); texIndex.put("skin_template_" + templateIdx, templateIdx); }
+                    String tref = "skin_template_" + templateIdx;
+                    BBModelHandSkinCompiler.Side side = BBModelHandSkinCompiler.sideOf(chain);
+                    BBModelHandSkinCompiler.Orientation o = BBModelHandSkinCompiler.orient(c.from, c.to, gunCentre, side);
+                    boolean sleeveCube = false; for (String nm : chain) if (BBModelHandSkinCompiler.isSleeveName(nm)) sleeveCube = true;
+                    JsonObject original = c.faces;
+                    c.faces = BBModelHandSkinCompiler.remapFaces(original, o, side, slim, sleeveCube, tref, c.from, c.to);
+                    remapped++;
+                    if (sleeveLayer && !sleeveCube) {
+                        // the skin's second layer, a quarter pixel out - a player without a sleeve shows skin there (ArmSkin.colorsFor)
+                        sleeve = new Cube();
+                        sleeve.uuid = c.uuid + "_sleeve"; sleeve.name = c.name + "_sleeve"; sleeve.bone = c.bone; sleeve.origin = c.origin; sleeve.rotation = c.rotation;
+                        sleeve.from = c.from; sleeve.to = c.to; sleeve.inflate = c.inflate + 0.25; sleeve.mirror = c.mirror; sleeve.boxUv = c.boxUv; sleeve.uvOffset = c.uvOffset;
+                        sleeve.faces = BBModelHandSkinCompiler.remapFaces(original, o, side, slim, true, tref, c.from, c.to);
+                        sleeves++;
+                    }
+                }
                 hasHands = true;
                 if (slim) hasSlim = true;
                 List<Cube> quads = explode(c, texIndex, texImg, texRes, slim ? orderS : orderC);
                 for (Cube q : quads) (slim ? slimCubes : classicCubes).put(q.uuid, q);
+                if (sleeve != null) for (Cube q : explode(sleeve, texIndex, texImg, texRes, slim ? orderS : orderC)) (slim ? slimCubes : classicCubes).put(q.uuid, q);
             }
             if (hasHands && !hasSlim) { slimCubes = classicCubes; orderS = orderC; }
             if (hasHands && hasSlim) {
@@ -1373,7 +1421,8 @@ public final class PackGenerator {
         if (hasHands) {
             textures.addProperty("skin", NS + ":item/arm_pixel");
             skinOrder.put(name, new String[]{ joinPixels(orderC), joinPixels(orderS) });
-            report.add(name + ": hands with player skin - " + orderC.size() + " classic / " + orderS.size() + " slim skin pixels" + (hasSlim ? "" : " (no _slim group: slim players get the classic hands)"));
+            report.add(name + ": hands with player skin - " + orderC.size() + " classic / " + orderS.size() + " slim skin pixels" + (hasSlim ? "" : " (no _slim group: slim players get the classic hands)")
+                + (remapped > 0 ? "; " + remapped + " hand cube(s) auto-remapped onto the skin's arm region" + (sleeves > 0 ? " + " + sleeves + " sleeve layer(s)" : "") : ""));
         }
         final boolean handsOn = hasHands, slimOn = hasSlim;
         final Map<String, Cube> cubesPlain = hasHands ? plainCubes : cubes, cubesC = classicCubes, cubesS = slimCubes;
@@ -1448,6 +1497,11 @@ public final class PackGenerator {
         String modeCfg = plugin.getConfig().getString("anim.mode", "display");
         if (currentGun != null && currentGun.animCfg() != null && currentGun.animCfg().contains("mode")) modeCfg = currentGun.animCfg().getString("mode", modeCfg);
         final boolean displayMode = composite && "display".equalsIgnoreCase(modeCfg) && currentGun != null;
+        if (comp != null) {
+            // the stack in the hand must never be drawn by the client's bobbing hand renderer: its own transforms get scale 0
+            comp.hideFirst = displayMode && plugin.getConfig().getBoolean("sway.hide-vanilla.first-person", true);
+            comp.hideThird = displayMode && plugin.getConfig().getBoolean("sway.hide-vanilla.third-person", false);
+        }
 
         // --- rest model
         if (composite) {
@@ -2187,6 +2241,7 @@ public final class PackGenerator {
         final JsonObject textures, display;
         final Map<String, Integer> texIndex; final List<double[]> texRes;
         final double scale; final double[] flashAt; final boolean hands, slim;
+        boolean hideFirst, hideThird;   // VanillaSwaySuppressor: zero-scale the vanilla hand contexts of every wrapper (display-rig guns)
         final Bone root = new Bone();                        // virtual bone for cubes outside any group
         final List<Part> parts = new ArrayList<>();
         final Clip base;                                     // the base pose (static_idle), layered under everything
@@ -2570,6 +2625,7 @@ public final class PackGenerator {
                         new double[]{ q(clamp80(tr3[0]), 0.01), q(clamp80(tr3[1]), 0.01), q(clamp80(tr3[2]), 0.01) },
                         new double[]{ q(Math.min(4, bs[0] * sc[0] / part.k), 0.0005), q(Math.min(4, bs[1] * sc[1] / part.k), 0.0005), q(Math.min(4, bs[2] * sc[2] / part.k), 0.0005) }));
                 }
+                VanillaSwaySuppressor.hideVanillaItem(disp, hideFirst, hideThird);
                 if (rest) verifyPart(part, M, Pw, Rw, sc);
                 JsonObject wrap = new JsonObject();
                 wrap.addProperty("parent", NS + ":item/" + part.geomPath());

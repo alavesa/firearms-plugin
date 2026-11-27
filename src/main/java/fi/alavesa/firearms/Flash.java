@@ -13,11 +13,18 @@ import java.time.Duration;
 
 /**
  * Flashbang: everyone in radius with a line of sight gets their screen washed white, strongest when near and facing
- * it, then it fades. Default (flashbang.mode: postfx, 26.3): the pack's post effects firearms:flash_1..24 (FlashPostFx:
- * white-out, blur, drained colour and bloom, one overall strength per level); the plugin holds the level of the hit and
- * steps it down tick by tick, so the white goes first and the blur / grey "ringing" lingers. Fallback (flashbang.mode:
- * title, or a server without per-player post effects): one glyph of the pack's firearms:flash font drawn as a fading
- * TITLE. The post shader is a POST shader, never a core shader: a mistake in it cannot make the client drop the pack.
+ * it, then it fades. Two layers (flashbang.mode):
+ * <ul>
+ *   <li>{@code post} - the pack's post effects firearms:flash_1..24 (FlashPostFx: white-out, blur, drained colour and
+ *       bloom, one overall strength per level, 26.3 per-player post effects); the plugin holds the level of the hit and
+ *       steps it down tick by tick, so the white goes first and the blur / grey "ringing" lingers. A post effect runs
+ *       over the world frame only: the hotbar and chat stay readable through it.</li>
+ *   <li>{@code title} - one glyph of the pack's firearms:flash font drawn as a fading TITLE: an instant hard white that
+ *       also covers the HUD, and the only layer a server without per-player post effects (before 26.3) can show.</li>
+ *   <li>{@code both} (default) - the title's hard white on top of the post effect's tail.</li>
+ * </ul>
+ * The post shader is a POST shader, never a core shader: a mistake in it cannot make the client drop the pack. Both
+ * layers need the pack; without it nothing shows (vanilla has no white to borrow).
  */
 final class Flash {
     private static final Component GLYPH = Component.text("", NamedTextColor.WHITE).font(Key.key("firearms", "flash"));
@@ -29,13 +36,28 @@ final class Flash {
     private static final class Fade {
         org.bukkit.scheduler.BukkitTask task;
         int level;
+        int remaining;
     }
 
     Flash(FirearmsPlugin plugin) { this.plugin = plugin; }
 
-    private boolean postFx() {
-        return PostEffects.available() && !plugin.getConfig().getString("flashbang.mode", "postfx").equalsIgnoreCase("title");
+    private boolean warned;
+
+    private String mode() {
+        String m = plugin.getConfig().getString("flashbang.mode", "both").toLowerCase(java.util.Locale.ROOT).trim();
+        if (m.equals("postfx")) m = "post";
+        if (!m.equals("post") && !m.equals("title") && !m.equals("both")) m = "both";
+        return m;
     }
+
+    private boolean postFx() {
+        if (mode().equals("title")) return false;
+        if (PostEffects.available()) return true;
+        if (!warned) { warned = true; plugin.getLogger().warning("Flashbang: this server has no per-player post effects (" + PostEffects.problem() + ") - the flash is the title glyph only (flashbang.mode: title)."); }
+        return false;
+    }
+
+    private boolean titleToo() { return !mode().equals("post") || !PostEffects.available(); }
 
     /** The grenade went off at `at`. */
     void burst(Location at, GrenadeType g, Player thrower) {
@@ -69,15 +91,16 @@ final class Flash {
         int hold = Math.min(ticks, (int) Math.round(plugin.getConfig().getInt("flashbang.hold-ticks", 12) * intensity));
         int fade = Math.max(1, ticks - hold);
         p.playSound(p.getLocation(), "minecraft:block.note_block.chime", 1.0f, 2.0f);
-        if (!postFx()) {
-            p.showTitle(Title.title(GLYPH, Component.empty(), Title.Times.times(Duration.ZERO, Duration.ofMillis(hold * 50L), Duration.ofMillis(fade * 50L))));
-            return;
-        }
+        if (titleToo()) p.showTitle(Title.title(GLYPH, Component.empty(), Title.Times.times(Duration.ZERO, Duration.ofMillis(hold * 50L), Duration.ofMillis(fade * 50L))));
+        if (!postFx()) return;
         // a longer tail than the white: the ringing outlasts the flash
         int tail = (int) Math.round(fade * plugin.getConfig().getDouble("flashbang.tail", 1.0));
         double strength = Math.min(1, intensity * 1.15 + 0.1);
-        cancel(p, true);
+        Fade old = fades.get(p.getUniqueId());
+        if (old != null && old.level >= Math.ceil(strength * FlashPostFx.LEVELS - 1e-9) && old.remaining > hold + tail) return;   // a weaker second flash changes nothing
+        cancel(p, false);   // the new fade takes over the level on the screen, no flicker
         Fade f = new Fade();
+        if (old != null) f.level = old.level;
         fades.put(p.getUniqueId(), f);
         int total = hold + Math.max(1, tail);
         int[] t = {0};
@@ -91,6 +114,7 @@ final class Flash {
                 PostEffects.swap(p, f.level > 0 ? FlashPostFx.id(f.level) : null, level > 0 ? FlashPostFx.id(level) : null);
                 f.level = level;
             }
+            f.remaining = total - t[0];
             if (++t[0] > total) cancel(p, true);
         }, 0L, 1L);
     }

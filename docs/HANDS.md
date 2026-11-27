@@ -23,6 +23,22 @@ without them. That is true in both animation modes (frames and the display rig).
    48 pixel quads, a 2x6 face 12. Transparent template pixels become holes.
 4. Keep the hands in the animated groups that should move them (reload, pump, inspect, draw).
 
+## 1b. Hands textured from the gun's own atlas (0.35)
+
+A hand bone named `left_hand`, `right_hand`, `left_arm`, `right_arm`, `l_hand`, `r_hand`, `hand_l`, `hand_r` (or any name
+with the configured `hands.group-keywords`) is a hand even when its faces are painted from the gun's texture, as TaCZ
+exports are. With `hands.auto-remap: true` (default) the generator re-points every face of such a cube at the arm region
+of a 64x64 skin: right arm `[40,16]-[56,32]` (sleeve `[40,32]-[56,48]`), left arm `[32,48]-[48,64]` (sleeve
+`[48,48]-[64,64]`), slim 3-px variants for slim players. The cube's longest edge is the arm, the end nearer the gun's
+centre is the hand, the side toward the player's right (left for the left hand) is the outer side and the top is the
+front of the arm. `hands.sleeve-layer: true` adds the skin's second layer a quarter pixel out; a player whose skin has no
+sleeve sees skin there. Model the hands on a real skin template (section 1) when the exact unwrap matters: an
+auto-remapped face may come out mirrored.
+
+Why not a `player_head` with the holder's profile: the 26.3 client's only skinned item renderer is the player head
+itself, which draws the head cube of the skin and nothing else - no item model type can take arbitrary geometry and
+"the holder's skin" as its texture. The per-pixel tints below are the one mechanism that reaches the skin on any shape.
+
 ## 2. Slim arms
 
 Add a second group whose name contains `slim` (`righthand_slim`) holding the 3-pixel-wide arm, mapped onto the
