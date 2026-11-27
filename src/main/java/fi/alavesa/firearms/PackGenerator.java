@@ -217,6 +217,8 @@ public final class PackGenerator {
         pack.add("pack", p);
         put("pack.mcmeta", GSON.toJson(pack));
         flashFont();
+        for (var fx : FlashPostFx.files().entrySet()) putBytes(fx.getKey(), fx.getValue());   // the flashbang's post effects
+        report.add("flashbang: post effects " + NS + ":flash_1.." + FlashPostFx.LEVELS + " (post shader, no core shader)");
 
         // anim-index.yml for the plugin
         YamlConfiguration idx = new YamlConfiguration();

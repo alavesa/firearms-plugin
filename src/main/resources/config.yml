@@ -372,7 +372,9 @@ hit-animations:
 # The white screen is one glyph of the pack's firearms:flash font (a big white bitmap) shown as a TITLE; the title's
 # own fade-out fades it. No shaders. Without the pack nothing shows.
 flashbang:
+  mode: postfx           # postfx = the pack's post effects flash_1..24 (white-out, blur, drained colour, bloom; 26.3). title = the old fading white glyph
   hold-ticks: 12         # solid white this long (scaled by how hard the flash hit) before the fade
+  tail: 1.0              # length of the fade after the hold, times the flash's remaining duration (the blur / grey ringing is the last part of it)
 
 # ---- Resource pack generator ----
 pack:

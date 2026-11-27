@@ -12,7 +12,7 @@ Ray-based guns plugin for Paper 26.3 (compiled against the 1.21.4 API; the first
 - Craters (bullet holes) as ItemDisplays you texture
 - `.bbmodel` → resource pack: drop Blockbench files in `plugins/Firearms/models/`, run `/firearms pack`; first person is a client-side item_display rig (display mode, default since 0.27), so post effects reach the gun and `/viewmodel` moves it per player
 - Aiming on the rig: each player's hip pose blends to one shared aim pose and back, interpolated by the client, tuned live with `/firearms pose <gun> aim ...`; animated blood/hole textures via .mcmeta
-- Smooth eased camera recoil (rotation packets only), camera shake; flashbang as a fading full-screen font glyph (no shaders anywhere)
+- Smooth eased camera recoil (rotation packets only), camera shake; flashbang as a full-screen post-effect overlay (white-out, blur, drained colour and bloom, fading by distance and facing; post shader only, no core shader; `flashbang.mode: title` = the old fading glyph)
 - Grenades: frag, incendiary, smoke, flashbang; an `experimental` gun where new features (rhythm fire detection, camera shake) are tried first; `/firearms rig` + docs/VIEWMODEL.md for viewmodel troubleshooting
 
 Commands: `/firearms list | give <id> [n] [player] | models | pack | mode | reload`, `/viewmodel <right> <up> <forward> | reset`
