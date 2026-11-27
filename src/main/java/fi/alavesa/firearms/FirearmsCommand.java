@@ -136,6 +136,14 @@ public final class FirearmsCommand implements CommandExecutor, TabCompleter {
                 sender.sendMessage(Component.text("docs/VIEWMODEL.md explains each line.", NamedTextColor.DARK_GRAY));
                 return true;
             }
+            case "flash" -> {   // /firearms flash <player> [intensity 0-1] [seconds] - the flashbang overlay on one player (testing)
+                Player t = args.length > 1 ? plugin.getServer().getPlayerExact(args[1]) : sender instanceof Player pl ? pl : null;
+                if (t == null) { sender.sendMessage(Component.text("/firearms flash <player> [intensity 0-1] [seconds]", NamedTextColor.RED)); return true; }
+                double in = args.length > 2 ? Math.max(0.05, Math.min(1, Double.parseDouble(args[2]))) : 1;
+                double sec = args.length > 3 ? Math.max(0.5, Math.min(30, Double.parseDouble(args[3]))) : 4;
+                plugin.flash().blind(t, in, (int) Math.round(sec * 20));
+                return true;
+            }
             case "aim" -> {   // /firearms aim <player> on|off - hold/release the sight for testing from the console
                 if (!sender.hasPermission("firearms.admin")) return deny(sender);
                 Player t = args.length >= 2 ? Bukkit.getPlayerExact(args[1]) : sender instanceof Player pl ? pl : null;
